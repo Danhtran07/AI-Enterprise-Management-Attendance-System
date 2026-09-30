@@ -33,6 +33,7 @@ def test_matching_identity_consumes_session_once():
     assert session.consume_identity_verification(101, face, 0.45)
     assert session.verification_consumed is True
     assert not session.consume_identity_verification(101, face, 0.45)
+    assert session.verification_status == "VERIFIED"
 
 
 def test_session_without_completed_liveness_cannot_be_consumed():

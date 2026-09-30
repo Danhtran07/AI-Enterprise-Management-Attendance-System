@@ -451,6 +451,7 @@ async def liveness_websocket(websocket: WebSocket, session_id: str):
                         break
                     session.state = SessionState.COMPLETE
                     session.liveness_status = True
+                    session.liveness_score = float(liveness_result["liveness_score"])
                     session.liveness_passed_at = datetime.now(timezone.utc)
                     token = _issue_liveness_token(session_id)
                     session.liveness_token = token
@@ -794,6 +795,9 @@ def legacy_recognize(body: LegacyRecognizeRequest):
             employee_id=best_id,
             confidence=round(best_similarity, 4),
             liveness=True,
+            liveness_score=session_manager.get_session(body.liveness_session_id).liveness_score,
+            verification_status="VERIFIED",
+            session_id=body.liveness_session_id,
             success=True,
             recognized=True,
         )

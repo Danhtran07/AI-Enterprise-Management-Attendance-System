@@ -93,10 +93,20 @@ def record_recognition_attendance(
             early_leave_minutes=metrics.early_leave_minutes,
             working_minutes=metrics.working_minutes,
             overtime_minutes=metrics.overtime_minutes,
+            timestamp=server_now,
+            face_similarity=recognition.confidence,
+            liveness_score=recognition.liveness_score,
+            verification_status=recognition.verification_status,
+            session_id=recognition.session_id,
         )
         db.add(attendance)
     elif attendance.check_out is None:
         attendance.check_out = server_now
+        attendance.timestamp = server_now
+        attendance.face_similarity = recognition.confidence
+        attendance.liveness_score = recognition.liveness_score
+        attendance.verification_status = recognition.verification_status
+        attendance.session_id = recognition.session_id
         metrics = calculate_attendance_metrics(
             attendance.check_in,
             server_now,

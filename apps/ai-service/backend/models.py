@@ -195,6 +195,9 @@ class BackendRecognitionResponse(BaseModel):
     employee_id: Optional[int] = None
     confidence: float = 0.0
     liveness: bool
+    liveness_score: float = 0.0
+    verification_status: str = "UNVERIFIED"
+    session_id: Optional[str] = None
     # Kept for compatibility with the existing FaceAttend client contract.
     success: bool = True
     recognized: Optional[bool] = None

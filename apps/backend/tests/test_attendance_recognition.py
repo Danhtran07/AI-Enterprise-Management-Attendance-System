@@ -70,6 +70,9 @@ def recognition(employee):
         employee_id=employee.id,
         confidence=0.97,
         liveness=True,
+        liveness_score=0.92,
+        verification_status="VERIFIED",
+        session_id="verification-session-1",
     )
 
 
@@ -120,6 +123,11 @@ def test_successful_check_in(db_session, recognition, employee):
     assert attendance.employee_id == employee.id
     assert attendance.check_in == NOW
     assert attendance.check_out is None
+    assert attendance.timestamp == NOW
+    assert attendance.face_similarity == pytest.approx(0.97)
+    assert attendance.liveness_score == pytest.approx(0.92)
+    assert attendance.verification_status == "VERIFIED"
+    assert attendance.session_id == "verification-session-1"
 
 
 def test_schedule_controls_late_status(db_session, employee, monday_schedule):
@@ -186,6 +194,11 @@ def test_successful_check_out(db_session, recognition, employee):
 
     assert second.id == first.id
     assert second.check_out == later
+    assert second.timestamp == later
+    assert second.face_similarity == pytest.approx(0.97)
+    assert second.liveness_score == pytest.approx(0.92)
+    assert second.verification_status == "VERIFIED"
+    assert second.session_id == "verification-session-1"
 
 
 def test_unknown_face_is_rejected(db_session):

@@ -22,6 +22,8 @@ class Session:
         self.employee_id: int | None = None
         self.face_embedding_reference: np.ndarray | None = None
         self.liveness_status = False
+        self.liveness_score = 0.0
+        self.verification_status = "UNBOUND"
         self.liveness_passed_at: datetime | None = None
         self.verification_consumed = False
         self._identity_lock = Lock()
@@ -41,6 +43,7 @@ class Session:
             raise ValueError("A finite face embedding is required")
         self.employee_id = int(employee_id)
         self.face_embedding_reference = vector
+        self.verification_status = "PENDING"
 
     def consume_identity_verification(
         self,
@@ -82,6 +85,7 @@ class Session:
         if not np.isfinite(similarity) or similarity < min_similarity:
             return False
         self.verification_consumed = True
+        self.verification_status = "VERIFIED"
         return True
 
     def _embedding_similarity(self, embedding: np.ndarray) -> float:

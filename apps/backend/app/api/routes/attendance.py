@@ -282,6 +282,9 @@ def recognize_attendance(
             matched=recognition.matched,
             confidence=recognition.confidence,
             liveness=recognition.liveness,
+            liveness_score=recognition.liveness_score,
+            verification_status=recognition.verification_status,
+            session_id=recognition.session_id,
         ),
     )
 
