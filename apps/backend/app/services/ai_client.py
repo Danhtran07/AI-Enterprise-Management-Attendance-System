@@ -24,6 +24,12 @@ class AIServiceResponseError(Exception):
     pass
 
 
+class AIServiceRejectedError(Exception):
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(detail)
+        self.status_code = status_code
+
+
 class AIRecognitionClient:
     def __init__(
         self,
@@ -80,6 +86,7 @@ class AIRecognitionClient:
             "AMBIGUOUS_MATCH",
             "LOW_LIGHT",
             "LIVENESS_FAILED",
+            "SESSION_IDENTITY_MISMATCH",
         }:
             response_data = {
                 **response_data,
@@ -92,13 +99,36 @@ class AIRecognitionClient:
         except (TypeError, ValueError) as exc:
             raise AIServiceResponseError("AI Service returned an invalid recognition result") from exc
 
-    def create_liveness_session(self) -> LivenessSessionResponse:
+    def create_liveness_session(
+        self,
+        initial_face_image: bytes | None = None,
+        candidates: list[AIRecognitionCandidate] | None = None,
+    ) -> LivenessSessionResponse:
+        payload = None
+        if initial_face_image is not None:
+            payload = {
+                "image": base64.b64encode(initial_face_image).decode("ascii"),
+                "candidates": [candidate.model_dump() for candidate in candidates or []],
+            }
         try:
-            response = self._client.post(f"{self._endpoint.rsplit('/face/', 1)[0]}/session/create")
+            endpoint = f"{self._endpoint.rsplit('/face/', 1)[0]}/session/create"
+            response = (
+                self._client.post(endpoint, json=payload)
+                if payload is not None else self._client.post(endpoint)
+            )
         except httpx.TimeoutException as exc:
             raise AIServiceTimeoutError("AI Service request timed out") from exc
         except httpx.RequestError as exc:
             raise AIServiceUnavailableError("AI Service is unavailable") from exc
+
+        if response.is_error:
+            try:
+                detail = response.json().get("detail", "Liveness session could not be created")
+            except (ValueError, AttributeError):
+                detail = "Liveness session could not be created"
+            if response.status_code < 500:
+                raise AIServiceRejectedError(response.status_code, str(detail))
+            raise AIServiceResponseError(str(detail))
 
         try:
             return LivenessSessionResponse.model_validate(response.json())

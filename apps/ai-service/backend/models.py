@@ -41,6 +41,9 @@ class FaceMetrics(BaseModel):
     blink_detected: bool = False
     blink_count: int = 0
     blink_confidence: float = 0.0
+    mouth_open: bool = False
+    mouth_ratio: float = 0.0
+    mouth_confidence: float = 0.0
     motion_detected: bool = False
     movement_score: float = 0.0
     yaw_proxy: float = 0.0
@@ -74,6 +77,8 @@ class FrameResponse(BaseModel):
     challenge_passed: bool
     feedback: str
     metrics: FaceMetrics
+    is_live: bool = False
+    liveness_score: float = 0.0
     liveness_token: Optional[str] = None
 
 
@@ -81,6 +86,7 @@ class CreateSessionResponse(BaseModel):
     session_id: str
     expires_at: str
     challenges: list[str]
+    employee_id: Optional[int] = None
 
 
 class SessionStatusResponse(BaseModel):
@@ -166,6 +172,13 @@ class LegacyEnrollRequest(BaseModel):
 class LegacyRecognizeCandidate(BaseModel):
     employee_id: int
     embedding: list[float]
+
+
+class CreateVerificationSessionRequest(BaseModel):
+    image: str
+    candidates: list[LegacyRecognizeCandidate] = Field(default_factory=list)
+    threshold: float = 0.5
+    min_margin: float = 0.05
 
 
 class LegacyRecognizeRequest(BaseModel):

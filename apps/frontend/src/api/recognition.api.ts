@@ -4,9 +4,15 @@ import type {
   RecognitionAttendanceResponse,
 } from "../types/recognition";
 
-export async function createLivenessSession(): Promise<LivenessSessionResponse> {
+export async function createLivenessSession(
+  initialFace?: Blob
+): Promise<LivenessSessionResponse> {
+  const formData = new FormData();
+  if (initialFace) formData.append("image", initialFace, "verification-start.jpg");
   const response = await apiClient.post<LivenessSessionResponse>(
-    "/api/attendance/liveness/session"
+    "/api/attendance/liveness/session",
+    initialFace ? formData : undefined,
+    initialFace ? { headers: { "Content-Type": "multipart/form-data" } } : undefined,
   );
   return response.data;
 }
@@ -14,7 +20,7 @@ export async function createLivenessSession(): Promise<LivenessSessionResponse> 
 export async function recognizeAttendance(
   image: Blob,
   livenessSessionId?: string,
-  fastMode = true
+  fastMode = false
 ): Promise<RecognitionAttendanceResponse> {
   const formData = new FormData();
   formData.append("image", image, "face-capture.jpg");

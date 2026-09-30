@@ -98,3 +98,24 @@ def test_legacy_ai_error_response_is_normalized():
     assert result.matched is False
     assert result.liveness is False
     assert result.error_code == "NO_FACE"
+
+
+def test_identity_bound_liveness_session_sends_initial_frame_and_gallery():
+    def handler(request):
+        body = json.loads(request.content)
+        assert request.url.path == "/session/create"
+        assert body["image"] == "c3RhcnQtZnJhbWU="
+        assert body["candidates"] == [{"employee_id": 7, "embedding": [0.1, 0.2]}]
+        return httpx.Response(
+            200,
+            json={"session_id": "session-x", "expires_at": "later",
+                  "challenges": ["BLINK"], "employee_id": 7},
+        )
+
+    client = make_client(handler)
+    session = client.create_liveness_session(
+        b"start-frame",
+        [AIRecognitionCandidate(employee_id=7, embedding=[0.1, 0.2])],
+    )
+    assert session.session_id == "session-x"
+    assert session.employee_id == 7

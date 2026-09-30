@@ -19,6 +19,7 @@ class LivenessSessionResponse(BaseModel):
     session_id: str
     expires_at: str
     challenges: list[str]
+    employee_id: int | None = None
 
 
 class AIEnrollmentResult(BaseModel):

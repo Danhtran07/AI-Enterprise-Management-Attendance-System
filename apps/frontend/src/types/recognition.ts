@@ -22,4 +22,5 @@ export interface LivenessSessionResponse {
   session_id: string;
   expires_at: string;
   challenges: string[];
+  employee_id?: number | null;
 }

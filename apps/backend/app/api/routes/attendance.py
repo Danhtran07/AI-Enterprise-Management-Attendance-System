@@ -31,6 +31,7 @@ from app.schemas.attendance import (
 from app.schemas.ai import AIRecognitionCandidate
 from app.services.ai_client import (
     AIRecognitionClient,
+    AIServiceRejectedError,
     AIServiceResponseError,
     AIServiceTimeoutError,
     AIServiceUnavailableError,
@@ -241,6 +242,8 @@ def recognize_attendance(
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except AIServiceResponseError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    except AIServiceRejectedError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
     if recognition.error_code == "NO_FACE":
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="No face detected")
@@ -285,18 +288,39 @@ def recognize_attendance(
 
 @router.post("/liveness/session")
 def create_liveness_session(
+    image: UploadFile | None = File(default=None),
+    db: Session = Depends(get_db),
     ai_client: AIRecognitionClient = Depends(_get_ai_client),
     current_user: User = Depends(get_current_user),
 ):
     del current_user
+    initial_face_image = None
+    candidates = None
+    if image is not None:
+        if not image.content_type or not image.content_type.startswith("image/"):
+            raise HTTPException(status_code=400, detail="A valid image file is required")
+        initial_face_image = image.file.read()
+        if not initial_face_image:
+            raise HTTPException(status_code=400, detail="Empty image data")
+        candidates = [
+            AIRecognitionCandidate(
+                employee_id=face_data.employee_id,
+                embedding=face_data.embedding,
+            )
+            for face_data in db.query(FaceData).all()
+        ]
     try:
-        return ai_client.create_liveness_session()
+        if initial_face_image is None:
+            return ai_client.create_liveness_session()
+        return ai_client.create_liveness_session(initial_face_image, candidates)
     except AIServiceTimeoutError as exc:
         raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=str(exc)) from exc
     except AIServiceUnavailableError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except AIServiceResponseError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    except AIServiceRejectedError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
 
 @router.websocket("/liveness/{session_id}")

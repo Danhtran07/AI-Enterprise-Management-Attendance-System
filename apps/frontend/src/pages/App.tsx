@@ -162,6 +162,26 @@ export default function App() {
     setState("idle");
   };
 
+  const captureVerificationFrame = async (): Promise<Blob> => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas || video.videoWidth === 0 || video.videoHeight === 0) {
+      throw new Error("The camera is not ready for identity verification.");
+    }
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Unable to capture a verification frame.");
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    return new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        (blob) => blob ? resolve(blob) : reject(new Error("Unable to encode verification frame.")),
+        "image/jpeg",
+        0.9,
+      );
+    });
+  };
+
   const startCamera = async () => {
     setError("");
     setResult(null);
@@ -199,7 +219,9 @@ export default function App() {
         return;
       }
 
-      const session = await createLivenessSession();
+      setFeedback("Recognizing your face before starting liveness verification...");
+      const initialFace = await captureVerificationFrame();
+      const session = await createLivenessSession(initialFace);
       sessionStorage.setItem(LIVENESS_SESSION_KEY, session.session_id);
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const token = localStorage.getItem("access_token");

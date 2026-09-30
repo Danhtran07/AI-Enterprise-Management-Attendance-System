@@ -9,7 +9,7 @@ import numpy as np
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -33,7 +33,7 @@ class _LimitBodySize(BaseHTTPMiddleware):
 from models import (
     ChallengeType, SessionState, CHALLENGE_SEQUENCE, CHALLENGE_INSTRUCTIONS,
     FrameResponse, CreateSessionResponse, SessionStatusResponse,
-    VerifyTokenRequest, VerifyTokenResponse, FaceMetrics,
+    VerifyTokenRequest, VerifyTokenResponse, FaceMetrics, CreateVerificationSessionRequest,
     RegisterFaceRequest, RegisterFaceResponse,
     VerifyFaceRequest, VerifyFaceResponse,
     SearchFaceRequest, SearchFaceResponse, SearchMatch, FaceRecordResponse,
@@ -42,9 +42,7 @@ from models import (
     BackendRecognitionResponse, RecognitionFeedbackRequest,
     RecognitionMetricsResponse,
 )
-from challenge_evaluator import evaluate_challenge
 from liveness_engine import LivenessEngine
-from blink_detector import BlinkDetector
 from session_manager import session_manager, SPOOF_FRAMES_REQUIRED
 from face_recognition_engine import FaceRecognitionEngine, SIMILARITY_THRESHOLD
 from face_db import face_db
@@ -52,12 +50,12 @@ from emotion_engine import blendshapes_to_emotions, dominant_emotion
 from rppg_engine import RPPGEngine
 from photo_validator import PhotoValidator
 from recognition_metrics import RecognitionMetrics
-from liveness.motion_detector import MotionDetector
 
 # ── JWT config ────────────────────────────────────────────────────────────────
 JWT_SECRET = os.getenv("JWT_SECRET", "change-me-in-production")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_SECONDS = 300  # token valid for 5 minutes after issuance
+SESSION_IDENTITY_SIMILARITY_THRESHOLD = 0.60
 
 # ── Config ────────────────────────────────────────────────────────────────────
 _cors_raw = os.getenv("CORS_ORIGINS", "*")
@@ -103,8 +101,6 @@ rppg_engines: dict[str, RPPGEngine] = {}
 # Per-session last ROI center position (normalized 0-1) — used to detect
 # inter-frame head movement and discard motion-corrupted samples.
 rppg_last_pos: dict[str, tuple[float, float]] = {}
-motion_detectors: dict[str, MotionDetector] = {}
-blink_detectors: dict[str, BlinkDetector] = {}
 
 
 # ── Health check ──────────────────────────────────────────────────────────────
@@ -182,12 +178,37 @@ async def validate_photo(
 
 
 @app.post("/session/create", response_model=CreateSessionResponse)
-def create_session():
+def create_session(body: CreateVerificationSessionRequest | None = Body(default=None)):
+    employee_id = None
+    embedding = None
+    if body is not None:
+        try:
+            image_bytes = base64.b64decode(body.image, validate=True)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="Invalid base64 image") from exc
+        result = rec_engine.analyze(image_bytes)
+        if not result.image_valid or not result.face_detected or result.embedding is None:
+            raise HTTPException(status_code=422, detail="A valid face is required to start verification")
+        if result.face_count > 1:
+            raise HTTPException(status_code=422, detail="Multiple faces detected")
+        ranked = _find_best_candidate(
+            np.asarray(result.embedding, dtype=np.float32), body.candidates
+        )
+        employee_id, similarity = ranked[0] if ranked else (None, -1.0)
+        if employee_id is None or similarity < body.threshold:
+            raise HTTPException(status_code=422, detail="Face was not recognized")
+        if _is_ambiguous_match(ranked, body.min_margin):
+            raise HTTPException(status_code=422, detail="Face match is ambiguous")
+        embedding = result.embedding
+
     session = session_manager.create_session()
+    if employee_id is not None and embedding is not None:
+        session.bind_identity(employee_id, embedding)
     return CreateSessionResponse(
         session_id=session.session_id,
         expires_at=session.expires_at_iso,
         challenges=[c.value for c in CHALLENGE_SEQUENCE],
+        employee_id=employee_id,
     )
 
 
@@ -209,6 +230,10 @@ def get_session_status(session_id: str):
 def verify_token(session_id: str, body: VerifyTokenRequest):
     try:
         payload = jwt.decode(body.liveness_token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        session = session_manager.get_session(session_id)
+        if (payload.get("sub") != session_id or session is None
+                or session.state != SessionState.COMPLETE or not session.liveness_status):
+            return VerifyTokenResponse(valid=False)
         return VerifyTokenResponse(
             valid=True,
             session_id=payload.get("sub"),
@@ -269,7 +294,8 @@ async def liveness_websocket(websocket: WebSocket, session_id: str):
                                      len(CHALLENGE_SEQUENCE), True,
                                      CHALLENGE_INSTRUCTIONS[ChallengeType.COMPLETE],
                                      FaceMetrics(face_detected=True),
-                                     liveness_token=session.liveness_token)
+                                     liveness_token=session.liveness_token,
+                                     liveness_result=engine.get_session_result(session_id))
                 continue
 
             if session.state == SessionState.FAILED:
@@ -280,19 +306,7 @@ async def liveness_websocket(websocket: WebSocket, session_id: str):
                 break
 
             # Process frame with MediaPipe
-            motion_detector = motion_detectors.get(session_id)
-            if motion_detector is None:
-                motion_detector = MotionDetector()
-                motion_detectors[session_id] = motion_detector
-            blink_detector = blink_detectors.get(session_id)
-            if blink_detector is None:
-                blink_detector = BlinkDetector()
-                blink_detectors[session_id] = blink_detector
-            metrics = engine.process_frame(
-                frame_bytes,
-                motion_detector=motion_detector,
-                blink_detector=blink_detector,
-            )
+            metrics = engine.process_frame(frame_bytes, session_id=session_id)
 
             # Feed rPPG engine.
             # We only accept a sample when the face is:
@@ -375,19 +389,69 @@ async def liveness_websocket(websocket: WebSocket, session_id: str):
                 break
 
             # Evaluate current challenge
-            challenge_passed, new_count = evaluate_challenge(
+            liveness_result = engine.evaluate_challenge(
+                session_id,
                 current_challenge,
                 metrics,
                 session.consecutive_count,
                 session.blink_count_at_challenge_start,
+                is_final_challenge=session.challenge_index == len(CHALLENGE_SEQUENCE) - 1,
             )
+            challenge_passed = liveness_result["challenge_passed"]
+            new_count = liveness_result["consecutive_count"]
             session.consecutive_count = new_count
+
+            # Bind every completed action (and both mouth-hold endpoints) to
+            # the identity captured when this verification session was created.
+            identity_sample_required = (
+                (current_challenge in (ChallengeType.BLINK, ChallengeType.BLINK_TWICE)
+                 and metrics.blink_detected)
+                or (current_challenge == ChallengeType.OPEN_MOUTH
+                    and (new_count == 1 or challenge_passed))
+            )
+            if identity_sample_required:
+                try:
+                    identity_frame = rec_engine.analyze(frame_bytes)
+                    identity_matches = bool(
+                        identity_frame.face_detected
+                        and identity_frame.face_count == 1
+                        and identity_frame.embedding is not None
+                        and session.confirm_challenge_identity(
+                            session.challenge_index,
+                            identity_frame.embedding,
+                            SESSION_IDENTITY_SIMILARITY_THRESHOLD,
+                        )
+                    )
+                except Exception:
+                    logger.exception("Liveness frame identity verification failed")
+                    identity_matches = False
+                if not identity_matches:
+                    session.state = SessionState.FAILED
+                    await _send_response(
+                        websocket, session_id, ChallengeType.FAILED,
+                        session.challenges_completed, False,
+                        "The face changed during liveness verification. Please restart.",
+                        metrics, liveness_result=liveness_result,
+                    )
+                    break
 
             if challenge_passed:
                 session.advance_challenge(metrics.blink_count)
 
                 if session.challenge_index >= len(CHALLENGE_SEQUENCE):
+                    if (not liveness_result["is_live"]
+                            or not session.has_confirmed_all_challenges(len(CHALLENGE_SEQUENCE))):
+                        session.state = SessionState.FAILED
+                        await _send_response(
+                            websocket, session_id, ChallengeType.FAILED,
+                            session.challenges_completed, False,
+                            "Liveness score did not meet the required threshold.",
+                            metrics, liveness_result=liveness_result,
+                        )
+                        break
                     session.state = SessionState.COMPLETE
+                    session.liveness_status = True
+                    session.liveness_passed_at = datetime.now(timezone.utc)
                     token = _issue_liveness_token(session_id)
                     session.liveness_token = token
                     await _send_response(
@@ -395,6 +459,7 @@ async def liveness_websocket(websocket: WebSocket, session_id: str):
                         session.challenges_completed, True,
                         CHALLENGE_INSTRUCTIONS[ChallengeType.COMPLETE],
                         metrics, liveness_token=token,
+                        liveness_result=liveness_result,
                     )
                 else:
                     next_challenge = session.current_challenge
@@ -402,13 +467,14 @@ async def liveness_websocket(websocket: WebSocket, session_id: str):
                         websocket, session_id, next_challenge,
                         session.challenge_index, False,
                         CHALLENGE_INSTRUCTIONS[next_challenge],
-                        metrics,
+                        metrics, liveness_result=liveness_result,
                     )
             else:
                 feedback = _progress_feedback(current_challenge, metrics, new_count)
                 await _send_response(
                     websocket, session_id, current_challenge,
                     session.challenge_index, False, feedback, metrics,
+                    liveness_result=liveness_result,
                 )
 
     except WebSocketDisconnect:
@@ -424,8 +490,7 @@ async def liveness_websocket(websocket: WebSocket, session_id: str):
     finally:
         rppg_engines.pop(session_id, None)
         rppg_last_pos.pop(session_id, None)
-        motion_detectors.pop(session_id, None)
-        blink_detectors.pop(session_id, None)
+        engine.reset_session(session_id)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -439,6 +504,7 @@ async def _send_response(
     feedback: str,
     metrics: FaceMetrics,
     liveness_token: str | None = None,
+    liveness_result: dict | None = None,
 ):
     response = FrameResponse(
         session_id=session_id,
@@ -448,6 +514,9 @@ async def _send_response(
         feedback=feedback,
         metrics=metrics,
         liveness_token=liveness_token,
+        is_live=bool(liveness_result and liveness_result.get("is_live", False)),
+        liveness_score=float(liveness_result.get("liveness_score", 0.0))
+        if liveness_result else 0.0,
     )
     await websocket.send_text(response.model_dump_json())
 
@@ -610,7 +679,24 @@ def _has_completed_liveness(session_id: str | None) -> bool:
         session
         and session.state == SessionState.COMPLETE
         and session.liveness_token
+        and session.liveness_status
+        and session.employee_id is not None
+        and session.face_embedding_reference is not None
+        and not session.verification_consumed
     )
+
+
+def _verify_session_identity(
+    session_id: str | None,
+    employee_id: int | None,
+    embedding: np.ndarray,
+) -> bool:
+    if not session_id or employee_id is None or not _has_completed_liveness(session_id):
+        return False
+    session = session_manager.get_session(session_id)
+    return bool(session and session.consume_identity_verification(
+        employee_id, embedding, SESSION_IDENTITY_SIMILARITY_THRESHOLD
+    ))
 
 
 def _find_best_candidate(
@@ -660,11 +746,11 @@ def legacy_recognize(body: LegacyRecognizeRequest):
     The Backend owns employee identity data and supplies the candidate gallery.
     A completed liveness session is required, but its JWT is never parsed here.
     """
-    if not body.fast_mode and not _has_completed_liveness(body.liveness_session_id):
+    if body.fast_mode or not body.liveness_session_id:
         return _recognition_error(
             422,
             "LIVENESS_FAILED",
-            "A completed liveness session is required",
+            "A bound liveness verification session is required",
         )
 
     try:
@@ -685,13 +771,6 @@ def legacy_recognize(body: LegacyRecognizeRequest):
     if result.face_count > 1:
         return _recognition_error(422, "MULTIPLE_FACES", "Multiple faces detected", True)
 
-    if body.fast_mode:
-        passive_liveness = engine.process_frame(img_bytes)
-        if passive_liveness.is_spoof:
-            return _recognition_error(422, "LIVENESS_FAILED", "Passive liveness validation failed", False)
-        if passive_liveness.is_low_light:
-            return _recognition_error(422, "LOW_LIGHT", "Lighting is insufficient for fast attendance", False)
-
     query = np.asarray(result.embedding, dtype=np.float32)
     ranked_matches = _find_best_candidate(query, body.candidates)
     best_id, best_similarity = ranked_matches[0] if ranked_matches else (None, -1.0)
@@ -703,6 +782,12 @@ def legacy_recognize(body: LegacyRecognizeRequest):
                 "AMBIGUOUS_MATCH",
                 "Multiple employees have similarly matching faces",
                 True,
+            )
+        if not _verify_session_identity(body.liveness_session_id, best_id, query):
+            return _recognition_error(
+                422,
+                "SESSION_IDENTITY_MISMATCH",
+                "The face does not match the identity bound to the liveness session",
             )
         response = BackendRecognitionResponse(
             matched=True,
