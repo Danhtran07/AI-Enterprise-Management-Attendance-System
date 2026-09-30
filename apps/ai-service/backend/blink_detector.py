@@ -73,6 +73,10 @@ class BlinkConfig:
 
 @dataclass
 class BlinkResult:
+    # Canonical contract consumed by LivenessEngine.
+    blink_detected: bool = False
+    blink_count: int = 0
+    # Legacy aliases retained for existing callers.
     blink: bool = False
     count: int = 0
     state: str = "INIT"
@@ -91,7 +95,12 @@ class BlinkResult:
     perclos: float = 0.0             # 0..1
 
     def to_dict(self):
-        return asdict(self)
+        """Return the normalized integration contract plus legacy diagnostics."""
+        data = asdict(self)
+        data["blink_detected"] = self.blink_detected
+        data["blink_count"] = self.blink_count
+        data["confidence"] = self.confidence
+        return data
 
 
 # ============================================================
@@ -154,6 +163,8 @@ class BlinkDetector:
             self.reset()
             res.reason = "no_face"
             res.state = self.state.name
+            res.blink_count = self.blink_count
+            res.count = self.blink_count
             return res
 
         # ---- làm mượt EMA từng mắt ----
@@ -201,9 +212,11 @@ class BlinkDetector:
 
         # ---- kết quả ----
         res.blink = blink
+        res.blink_detected = blink
         res.long_close = long_close
         res.wink = wink
         res.count = self.blink_count
+        res.blink_count = self.blink_count
         res.state = self.state.name
         res.confidence = self._frame_confidence(ratio, asym)
         res.blink_rate = self._blink_rate(t)

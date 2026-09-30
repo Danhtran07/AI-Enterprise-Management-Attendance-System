@@ -107,10 +107,31 @@ def test_blink_requires_open_closed_open_sequence():
     result = h.feed([0.30])[0]                       # mở lại: tính 1 lần chớp
 
     assert result.blink is True
+    assert result.blink_detected is True
     assert result.count == 1
+    assert result.blink_count == 1
     assert result.confidence > 0
     assert result.blink_confidence > 0
     assert 0.03 <= result.blink_duration <= 0.8
+
+    normalized = result.to_dict()
+    assert normalized["blink_detected"] is True
+    assert normalized["blink_count"] == 1
+    assert 0.0 <= normalized["confidence"] <= 1.0
+
+
+def test_no_face_resets_state_and_emits_normalized_negative_result():
+    h = Harness()
+    h.feed([0.30, 0.05])
+
+    result = h.det.update(None, timestamp=h.t + h.dt)
+    normalized = result.to_dict()
+
+    assert result.state == "OPEN"
+    assert normalized["blink_detected"] is False
+    assert normalized["blink_count"] == 0
+    assert normalized["confidence"] == 0.0
+    assert result.reason == "no_face"
 
 
 def test_blink_detection_does_not_require_head_pose_landmarks():
