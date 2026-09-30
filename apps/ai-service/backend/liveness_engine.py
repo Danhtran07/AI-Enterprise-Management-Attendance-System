@@ -1,11 +1,10 @@
-import cv2
 import numpy as np
-import mediapipe as mp
-from mediapipe.tasks import python as mp_python
-from mediapipe.tasks.python import vision as mp_vision
+from collections.abc import Mapping
+from typing import Any, Protocol, TYPE_CHECKING
 from pathlib import Path
 
-from models import FaceMetrics
+if TYPE_CHECKING:
+    from models import FaceMetrics
 
 # MediaPipe landmark indices
 NOSE_TIP = 1
@@ -46,26 +45,196 @@ SPOOF_Z_STD_MIN   = 0.008
 LOW_LIGHT_MEAN    = 25.0
 
 MODEL_PATH = Path(__file__).parent / "face_landmarker.task"
+LIVE_THRESHOLD = 0.85
+
+
+class ChallengeManagerProtocol(Protocol):
+    """Small interface allowing the challenge policy to be injected."""
+
+    @property
+    def current_challenge(self) -> str: ...
+
+    @property
+    def complete(self) -> bool: ...
+
+    def observe(self, challenge: str, *, blink: bool, blink_count: int,
+                mouth_open: bool) -> bool: ...
+
+    def record_score(self, score: float) -> None: ...
+
+    @property
+    def checks(self) -> dict[str, bool]: ...
+
+    @property
+    def completed_scores(self) -> list[float]: ...
+
+
+class ChallengeManager:
+    """In-memory challenge sequence: blink, mouth open, then two blinks."""
+
+    SEQUENCE = ("BLINK", "OPEN_MOUTH", "BLINK_TWICE")
+
+    def __init__(self) -> None:
+        self._index = 0
+        self._blink_total = 0
+        self._checks = {"blink": False, "mouth": False}
+        self._scores: list[float] = []
+
+    @property
+    def current_challenge(self) -> str:
+        return self.SEQUENCE[self._index] if not self.complete else "PASSED"
+
+    @property
+    def complete(self) -> bool:
+        return self._index >= len(self.SEQUENCE)
+
+    @property
+    def checks(self) -> dict[str, bool]:
+        return dict(self._checks)
+
+    @property
+    def completed_scores(self) -> list[float]:
+        return list(self._scores)
+
+    def observe(self, challenge: str, *, blink: bool, blink_count: int,
+                mouth_open: bool) -> bool:
+        """Record one detector update; return whether the active step passed."""
+        if self.complete or challenge != self.current_challenge:
+            return False
+
+        if challenge in ("BLINK", "BLINK_TWICE"):
+            self._blink_total += max(1 if blink else 0, blink_count)
+            passed = self._blink_total >= (2 if challenge == "BLINK_TWICE" else 1)
+            if passed:
+                self._checks["blink"] = True
+        else:
+            passed = mouth_open
+            if passed:
+                self._checks["mouth"] = True
+
+        if passed:
+            self._index += 1
+            self._blink_total = 0
+        return passed
+
+    def record_score(self, score: float) -> None:
+        self._scores.append(score)
 
 
 class LivenessEngine:
-    def __init__(self):
-        base_options = mp_python.BaseOptions(model_asset_path=str(MODEL_PATH))
-        options = mp_vision.FaceLandmarkerOptions(
-            base_options=base_options,
-            output_face_blendshapes=True,   # needed for smile score
-            num_faces=2,
-            min_face_detection_confidence=0.5,
-            min_face_presence_confidence=0.5,
-            min_tracking_confidence=0.5,
-        )
-        self.detector = mp_vision.FaceLandmarker.create_from_options(options)
+    def __init__(self, challenge_manager: ChallengeManagerProtocol | None = None,
+                 face_landmarker: Any | None = None):
+        # Both dependencies can be supplied in tests or by an application
+        # composition root; defaults preserve the existing FastAPI behavior.
+        self.challenge_manager = challenge_manager or ChallengeManager()
+        self._last_blink_count = 0
+        if face_landmarker is None:
+            import mediapipe as mp
+            from mediapipe.tasks import python as mp_python
+            from mediapipe.tasks.python import vision as mp_vision
+
+            base_options = mp_python.BaseOptions(model_asset_path=str(MODEL_PATH))
+            options = mp_vision.FaceLandmarkerOptions(
+                base_options=base_options,
+                output_face_blendshapes=True,
+                num_faces=2,
+                min_face_detection_confidence=0.5,
+                min_face_presence_confidence=0.5,
+                min_tracking_confidence=0.5,
+            )
+            face_landmarker = mp_vision.FaceLandmarker.create_from_options(options)
+        self.detector = face_landmarker
+
+    def process(self, blink_result: Any, mouth_result: Any) -> dict[str, Any]:
+        """Aggregate detector outputs and advance the injected challenge policy.
+
+        Results may be mappings or detector result objects. Blink detectors
+        exposing a cumulative ``count``/``blink_count`` should set ``blink``
+        for the current frame as well; only newly reported count is consumed.
+        The legacy ``process_frame`` path remains available to the current API.
+        """
+        manager = self.challenge_manager
+        challenge = manager.current_challenge
+        blink_detected = bool(self._value(blink_result, "blink", False))
+        blink_count = self._bounded_int(self._value(
+            blink_result, "blink_count", self._value(blink_result, "count", 0)
+        ))
+        blink_confidence = self._bounded_float(self._value(
+            blink_result, "blink_confidence", self._value(blink_result, "confidence", 0.0)
+        ))
+        mouth_open = bool(self._value(mouth_result, "mouth_open", False))
+        mouth_confidence = self._bounded_float(self._value(mouth_result, "confidence", 0.0))
+        motion_score = self._bounded_float(self._value(blink_result, "motion_score", 1.0 if blink_detected else 0.0))
+
+        challenge_passed = False
+        if not manager.complete:
+            # A detector's cumulative count is useful for the two-blink step.
+            # It is capped per update so malformed detector data cannot skip
+            # arbitrarily far through a challenge.
+            new_blink_count = max(0, blink_count - self._last_blink_count)
+            self._last_blink_count = max(self._last_blink_count, blink_count)
+            challenge_passed = manager.observe(
+                challenge,
+                blink=blink_detected,
+                blink_count=min(new_blink_count, 2),
+                mouth_open=mouth_open,
+            )
+
+        if challenge in ("BLINK", "BLINK_TWICE"):
+            score = 0.8 * blink_confidence + 0.2 * motion_score
+        elif challenge == "OPEN_MOUTH":
+            score = 0.8 * mouth_confidence
+        else:
+            score = 1.0 if manager.complete else 0.0
+        score = round(self._bounded_float(score), 4)
+
+        if challenge_passed:
+            manager.record_score(score)
+        if manager.complete and hasattr(manager, "completed_scores"):
+            prior_scores = manager.completed_scores
+            # The terminal frame is the final challenge's score; the score list
+            # also contains the earlier completed challenge scores.
+            score = round(sum(prior_scores) / len(prior_scores), 4) if prior_scores else score
+
+        checks = manager.checks
+        return {
+            "live": bool(manager.complete and score >= LIVE_THRESHOLD),
+            "score": score,
+            "challenge": challenge,
+            "checks": checks,
+        }
+
+    @staticmethod
+    def _value(result: Any, key: str, default: Any) -> Any:
+        if isinstance(result, Mapping):
+            return result.get(key, default)
+        return getattr(result, key, default) if result is not None else default
+
+    @staticmethod
+    def _bounded_float(value: Any) -> float:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        if not np.isfinite(number):
+            return 0.0
+        return float(np.clip(number, 0.0, 1.0))
+
+    @staticmethod
+    def _bounded_int(value: Any) -> int:
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return 0
 
     def process_frame(self, jpeg_bytes: bytes) -> "FaceMetrics":
         """
         Process one JPEG frame. Returns a fully populated FaceMetrics including
         forehead_rgb and forehead_bbox_norm when a face is detected.
         """
+        import cv2
+        from models import FaceMetrics
+
         nparr = np.frombuffer(jpeg_bytes, np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         if frame is None:
