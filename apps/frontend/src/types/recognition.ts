@@ -9,6 +9,9 @@ export interface RecognitionSummary {
   matched: boolean;
   confidence: number;
   liveness: boolean;
+  liveness_score: number;
+  verification_status: string;
+  session_id: string | null;
 }
 
 export interface RecognitionAttendanceResponse {

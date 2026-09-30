@@ -29,6 +29,16 @@ const LIVENESS_SESSION_KEY = "liveness_session_id";
 const FAST_ATTENDANCE = false;
 const FACE_LANDMARKER_MODEL =
   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+const LIVENESS_STEPS = [
+  { challenge: "BLINK", label: "Chớp mắt" },
+  { challenge: "OPEN_MOUTH", label: "Mở miệng" },
+  { challenge: "BLINK_TWICE", label: "Chớp mắt 2 lần" },
+] as const;
+
+function challengeLabel(challenge: string) {
+  return LIVENESS_STEPS.find((step) => step.challenge === challenge)?.label
+    || (challenge === "COMPLETE" ? "Đã xác minh" : "Đang kiểm tra khuôn mặt");
+}
 
 function formatTime(value: string | null) {
   if (!value) return "-";
@@ -58,6 +68,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [result, setResult] = useState<RecognitionAttendanceResponse | null>(null);
   const [challenge, setChallenge] = useState("");
+  const [challengeIndex, setChallengeIndex] = useState(0);
   const [feedback, setFeedback] = useState("Preparing liveness verification...");
   const [livenessComplete, setLivenessComplete] = useState(false);
 
@@ -157,6 +168,7 @@ export default function App() {
     setError("");
     setResult(null);
     setChallenge("");
+    setChallengeIndex(0);
     setFeedback("Preparing liveness verification...");
     setLivenessComplete(false);
     setState("idle");
@@ -263,6 +275,9 @@ export default function App() {
           return;
         }
         setChallenge(message.challenge || "");
+        if (typeof message.challenge_index === "number") {
+          setChallengeIndex(message.challenge_index);
+        }
         setFeedback(message.feedback || "Keep your face inside the frame...");
         if (message.challenge === "COMPLETE") {
           setLivenessComplete(true);
@@ -405,12 +420,18 @@ export default function App() {
               <p className="mt-2 text-2xl font-semibold text-slate-900">
                 {(result.recognition.confidence * 100).toFixed(1)}%
               </p>
+              <p className="mt-1 text-xs text-slate-500">Face match similarity</p>
             </div>
             <div className="rounded-xl border border-slate-200 p-4">
               <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-400">
                 Liveness
               </p>
-              <p className="mt-2 text-2xl font-semibold text-emerald-700">Verified</p>
+              <p className="mt-2 text-2xl font-semibold text-emerald-700">
+                {(result.recognition.liveness_score * 100).toFixed(1)}%
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Verified · {result.recognition.verification_status}
+              </p>
             </div>
             <div className="rounded-xl border border-slate-200 p-4">
               <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-400">
@@ -489,8 +510,32 @@ export default function App() {
                 {livenessComplete ? "Capture" : "Complete liveness verification first"}
               </button>}
               <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50 p-4 text-center">
+                {!FAST_ATTENDANCE && (
+                  <ol className="mb-4 grid grid-cols-3 gap-2 text-left" aria-label="Liveness challenge progress">
+                    {LIVENESS_STEPS.map((step, index) => {
+                      const completed = challenge === "COMPLETE" || index < challengeIndex;
+                      const current = challenge === step.challenge;
+                      return (
+                        <li
+                          key={step.challenge}
+                          aria-current={current ? "step" : undefined}
+                          className={`rounded-lg border px-2 py-2 text-center text-xs font-semibold sm:px-3 ${
+                            completed
+                              ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                              : current
+                                ? "border-blue-300 bg-white text-blue-700 ring-2 ring-blue-100"
+                                : "border-blue-100 bg-blue-50/50 text-slate-400"
+                          }`}
+                        >
+                          <span className="block text-[10px] opacity-70">Bước {index + 1}</span>
+                          {step.label}
+                        </li>
+                      );
+                    })}
+                  </ol>
+                )}
                 <p className="text-xs font-bold uppercase tracking-[0.16em] text-blue-600">
-                  {FAST_ATTENDANCE ? "Fast attendance scan" : challenge === "COMPLETE" ? "Verification complete" : challenge.replaceAll("_", " ") || "Liveness check"}
+                  {FAST_ATTENDANCE ? "Fast attendance scan" : challengeLabel(challenge)}
                 </p>
                 <p className="mt-1 text-sm font-medium text-slate-700">{feedback}</p>
               </div>
