@@ -37,9 +37,9 @@ Detects whether a face is real or synthetic by measuring a heartbeat signal from
 - Flat-signal detector: instantly flags still images / printed photos
 
 ### 3. Challenge-based Liveness (WebSocket)
-Sequential gesture challenges — look left, look right, smile — to confirm the person is present and responsive.
+Sequential liveness challenges — blink, open the mouth, then blink twice — to confirm the person is present and responsive.
 
-Each challenge requires 20 consecutive passing frames (~1.3s at 15fps). Between challenges the user must return to a neutral forward-facing position before the next begins. Spoof detection runs on every frame via Laplacian texture variance and landmark depth variance.
+Blink challenges require complete blink events detected by the EAR state machine; the final step requires two new blink events after the mouth challenge. Opening the mouth must pass 20 consecutive frames (~1.3s at 15fps). No head-turn or return-to-neutral gesture is required. Spoof detection runs on every frame via Laplacian texture variance and landmark depth variance.
 
 ### 4. Face Recognition
 - `POST /face/register` — enrol a face, get a `face_id`
@@ -124,7 +124,7 @@ face-biometrics-api/
 │   ├── photo_validator.py          # Photo validation engine (7 checks + AI detection)
 │   ├── liveness_engine.py          # MediaPipe frame processing, forehead ROI extraction
 │   ├── rppg_engine.py              # CHROM rPPG algorithm, heartbeat / liveness verdict
-│   ├── challenge_evaluator.py      # Gesture challenge logic (look left/right, smile)
+│   ├── challenge_evaluator.py      # Blink and mouth challenge evaluation
 │   ├── face_recognition_engine.py  # InsightFace wrapper
 │   ├── face_db.py                  # FAISS-backed face embedding store
 │   ├── emotion_engine.py           # Blendshape → emotion scores

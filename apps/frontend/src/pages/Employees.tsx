@@ -1054,9 +1054,9 @@ export default function Employees() {
 
               <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide">
                 {([
-                  ["TURN_LEFT", "Quay trái", 0],
-                  ["TURN_RIGHT", "Quay phải", 1],
-                  ["MOUTH_OPEN", "Mở miệng", 2],
+                  ["BLINK", "Chớp mắt", 0],
+                  ["OPEN_MOUTH", "Mở miệng", 1],
+                  ["BLINK_TWICE", "Chớp mắt 2 lần", 2],
                 ] as const).map(([key, label, index]) => (
                   <span
                     key={key}

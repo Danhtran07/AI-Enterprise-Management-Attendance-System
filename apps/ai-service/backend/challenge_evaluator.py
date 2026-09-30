@@ -1,7 +1,5 @@
 from models import ChallengeType, FaceMetrics
 from liveness_engine import (
-    TURN_LEFT_THRESHOLD, TURN_RIGHT_THRESHOLD,
-    NEUTRAL_THRESHOLD, SMILE_SCORE_THRESHOLD, BLINK_SCORE_THRESHOLD,
     MOUTH_OPEN_SCORE_THRESHOLD,
 )
 
@@ -13,6 +11,7 @@ def evaluate_challenge(
     challenge: ChallengeType,
     metrics: FaceMetrics,
     consecutive_count: int,
+    blink_count_at_challenge_start: int = 0,
 ) -> tuple[bool, int]:
     """
     Returns (challenge_fully_passed, updated_consecutive_count).
@@ -21,38 +20,21 @@ def evaluate_challenge(
     if not metrics.face_detected or metrics.is_spoof or metrics.is_low_light:
         return False, 0
 
-    frame_passes = _frame_passes_challenge(challenge, metrics)
-
     if challenge == ChallengeType.BLINK:
-        return frame_passes, 1 if frame_passes else 0
+        return metrics.blink_detected, 1 if metrics.blink_detected else 0
 
+    if challenge == ChallengeType.BLINK_TWICE:
+        completed_blinks = max(0, metrics.blink_count - blink_count_at_challenge_start)
+        return completed_blinks >= 2, completed_blinks
+
+    frame_passes = _frame_passes_challenge(challenge, metrics)
     new_count = consecutive_count + 1 if frame_passes else 0
     challenge_passed = new_count >= CONSECUTIVE_FRAMES_REQUIRED
     return challenge_passed, new_count
 
 
-def is_neutral(metrics: FaceMetrics) -> bool:
-    """True when the face is roughly forward-facing (used to gate next challenge)."""
-    return metrics.face_detected and abs(metrics.yaw_proxy) < NEUTRAL_THRESHOLD
-
-
 def _frame_passes_challenge(challenge: ChallengeType, metrics: FaceMetrics) -> bool:
-    # Mirrored frame (selfie view) convention:
-    #   Person turns THEIR LEFT  → nose moves to lower x → yaw_proxy NEGATIVE
-    #   Person turns THEIR RIGHT → nose moves to higher x → yaw_proxy POSITIVE
-    if challenge == ChallengeType.TURN_LEFT:
-        return metrics.yaw_proxy < TURN_LEFT_THRESHOLD   # e.g. < -0.30
-
-    if challenge == ChallengeType.TURN_RIGHT:
-        return metrics.yaw_proxy > TURN_RIGHT_THRESHOLD  # e.g. > +0.30
-
-    if challenge == ChallengeType.SMILE:
-        return metrics.smile_score >= SMILE_SCORE_THRESHOLD  # 0–1 blendshape score
-
-    if challenge == ChallengeType.BLINK:
-        return metrics.blink_score >= BLINK_SCORE_THRESHOLD
-
-    if challenge == ChallengeType.MOUTH_OPEN:
+    if challenge == ChallengeType.OPEN_MOUTH:
         return metrics.mouth_open_score >= MOUTH_OPEN_SCORE_THRESHOLD
 
     return False

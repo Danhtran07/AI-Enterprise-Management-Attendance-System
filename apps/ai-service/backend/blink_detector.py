@@ -10,7 +10,7 @@ Cải tiến so với bản cũ:
 - Làm mượt bằng EMA nhẹ (không "nuốt" các cú chớp nhanh như moving average)
 - State machine đầy đủ: OPEN -> CLOSING -> CLOSED -> OPENING -> OPEN
 - Phân biệt: chớp mắt / nháy 1 mắt (wink) / nhắm lâu (buồn ngủ)
-- Kiểm tra góc quay đầu (yaw), mất khung hình, mất mặt -> reset an toàn
+- Mất khung hình hoặc mất mặt -> reset an toàn
 - Nhận timestamp ngoài (dùng được với file video / unit test), mặc định monotonic clock
 - Thống kê: blink rate / phút, PERCLOS, confidence theo từng frame và từng lần chớp
 """
@@ -31,11 +31,6 @@ from typing import Optional, Tuple
 
 LEFT_EYE = (33, 160, 158, 133, 153, 144)      # p1..p6
 RIGHT_EYE = (362, 385, 387, 263, 373, 380)    # p1..p6
-
-NOSE_TIP = 1
-LEFT_CHEEK = 234
-RIGHT_CHEEK = 454
-
 
 class BlinkState(Enum):
     INIT = 0      # đang calibration
@@ -71,8 +66,6 @@ class BlinkConfig:
     max_frame_gap: float = 0.5          # khoảng hở frame tối đa trước khi reset
     max_wink_asym: float = 0.35         # chênh lệch tỉ lệ 2 mắt coi là bất đối xứng
     wink_frame_ratio: float = 0.5       # >50% frame bất đối xứng => wink
-    yaw_limits: Tuple[float, float] = (0.5, 2.0)   # tỉ lệ khoảng cách mũi-má trái/phải
-
     # thống kê
     stats_window: float = 60.0
     perclos_ratio: float = 0.2          # mắt nhắm >=80% => tính vào PERCLOS
@@ -163,16 +156,6 @@ class BlinkDetector:
             res.state = self.state.name
             return res
 
-        # ---- kiểm tra quay đầu ----
-        yaw = self._yaw_ratio(landmarks, image_size)
-        lo, hi = cfg.yaw_limits
-        if yaw is None or not (lo <= yaw <= hi):
-            self.reset()
-            res.reason = "head_pose"
-            res.state = self.state.name
-            return res
-        yaw_score = max(0.0, 1.0 - abs(math.log(yaw)) / math.log(hi))
-
         # ---- làm mượt EMA từng mắt ----
         a = cfg.ema_alpha
         if self._ema is None:
@@ -222,7 +205,7 @@ class BlinkDetector:
         res.wink = wink
         res.count = self.blink_count
         res.state = self.state.name
-        res.confidence = self._frame_confidence(ratio, asym, yaw_score)
+        res.confidence = self._frame_confidence(ratio, asym)
         res.blink_rate = self._blink_rate(t)
         res.perclos = round(self._perclos_closed / self._perclos_total, 3) \
             if self._perclos_total > 0 else 0.0
@@ -261,17 +244,6 @@ class BlinkDetector:
         if horizontal < 1e-9:
             return None
         return (math.dist(p2, p6) + math.dist(p3, p5)) / (2.0 * horizontal)
-
-    def _yaw_ratio(self, landmarks, image_size):
-        try:
-            pt = self._points(landmarks, image_size)
-            nose, lc, rc = pt(NOSE_TIP), pt(LEFT_CHEEK), pt(RIGHT_CHEEK)
-        except Exception:
-            return None
-        dl, dr = abs(nose[0] - lc[0]), abs(rc[0] - nose[0])
-        if dl < 1e-9 or dr < 1e-9:
-            return None
-        return dl / dr
 
     # --------------------------------------------------------
     # CALIBRATION
@@ -406,11 +378,11 @@ class BlinkDetector:
             return 0.0
         return round(len(self._blink_times) / span * 60.0, 1)
 
-    def _frame_confidence(self, ratio, asym, yaw_score):
+    def _frame_confidence(self, ratio, asym):
         cfg = self.cfg
         decisive = 1.0 if (ratio <= cfg.close_ratio or ratio >= cfg.open_ratio) else 0.5
         sync = max(0.0, 1.0 - asym / cfg.max_wink_asym)
-        return round(min(1.0, 0.4 * decisive + 0.3 * sync + 0.3 * yaw_score), 3)
+        return round(min(1.0, 0.55 * decisive + 0.45 * sync), 3)
 
 
 # ============================================================

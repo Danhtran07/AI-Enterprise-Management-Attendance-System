@@ -18,7 +18,7 @@ class Session:
         self.challenges_completed = 0
         self.liveness_token: str | None = None
         self.smile_photo_path: str | None = None
-        self.waiting_for_neutral: bool = False  # must return to forward-facing before next challenge
+        self.blink_count_at_challenge_start: int = 0
         self.awaiting_rppg: bool = False
         self.spoof_consecutive_count = 0
         self.created_at = time.monotonic()
@@ -39,17 +39,11 @@ class Session:
         expiry = datetime.now(timezone.utc) + timedelta(seconds=SESSION_TTL_SECONDS)
         return expiry.isoformat()
 
-    def advance_challenge(self):
+    def advance_challenge(self, blink_count: int = 0):
         self.challenge_index += 1
         self.challenges_completed += 1
         self.consecutive_count = 0
-        # For head-turn challenges, require returning to neutral before next one
-        from models import CHALLENGE_SEQUENCE, ChallengeType
-        next_is_head_turn = (
-            self.challenge_index < len(CHALLENGE_SEQUENCE) and
-            CHALLENGE_SEQUENCE[self.challenge_index] in (ChallengeType.TURN_LEFT, ChallengeType.TURN_RIGHT)
-        )
-        self.waiting_for_neutral = next_is_head_turn
+        self.blink_count_at_challenge_start = max(0, blink_count)
 
     def is_replay_frame(self, frame_bytes: bytes) -> bool:
         frame_hash = hashlib.sha256(frame_bytes).hexdigest()

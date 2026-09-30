@@ -5,35 +5,16 @@ from pathlib import Path
 
 if TYPE_CHECKING:
     from models import FaceMetrics
+    from blink_detector import BlinkDetector
     from liveness.motion_detector import MotionDetector
 
 # MediaPipe landmark indices
 NOSE_TIP = 1
-# Landmark 33  = person's LEFT eye outer corner
-# Landmark 263 = person's RIGHT eye outer corner
-# In camera.js the frame is mirrored (selfie view), so:
-#   - Person's LEFT eye (33)  appears on the LEFT  side of the image → lower x
-#   - Person's RIGHT eye (263) appears on the RIGHT side of the image → higher x
-# Therefore:
-#   - Person turns THEIR LEFT  → nose moves LEFT  in image → yaw_proxy NEGATIVE
-#   - Person turns THEIR RIGHT → nose moves RIGHT in image → yaw_proxy POSITIVE
 LEFT_EYE_OUTER = 33
 RIGHT_EYE_OUTER = 263
 LEFT_EYE_LANDMARKS = (33, 160, 158, 133, 153, 144)
 RIGHT_EYE_LANDMARKS = (362, 385, 387, 263, 373, 380)
 
-# Thresholds
-# yaw_proxy < -0.30  → person has turned LEFT
-# yaw_proxy >  0.30  → person has turned RIGHT
-TURN_LEFT_THRESHOLD  = -0.30   # yaw must be BELOW this for "turn left"
-TURN_RIGHT_THRESHOLD =  0.30   # yaw must be ABOVE this for "turn right"
-NEUTRAL_THRESHOLD    =  0.15   # within ±0.15 counts as "facing forward"
-
-# Smile blendshape threshold (0–1 score from MediaPipe)
-SMILE_SCORE_THRESHOLD = 0.5
-# Webcam frames often under-report MediaPipe eye closure scores. Keep this
-# above neutral noise while allowing a natural blink to pass reliably.
-BLINK_SCORE_THRESHOLD = 0.25
 MOUTH_OPEN_SCORE_THRESHOLD = 0.25
 
 UPPER_INNER_LIP = 13
@@ -237,12 +218,14 @@ class LivenessEngine:
             return 0
 
     def process_frame(self, jpeg_bytes: bytes,
-                      motion_detector: "MotionDetector | None" = None) -> "FaceMetrics":
+                      motion_detector: "MotionDetector | None" = None,
+                      blink_detector: "BlinkDetector | None" = None) -> "FaceMetrics":
         """
         Process one JPEG frame. Returns a fully populated FaceMetrics including
         forehead_rgb and forehead_bbox_norm when a face is detected.
         """
         import cv2
+        import mediapipe as mp
         from models import FaceMetrics
 
         nparr = np.frombuffer(jpeg_bytes, np.uint8)
@@ -250,6 +233,8 @@ class LivenessEngine:
         if frame is None:
             if motion_detector is not None:
                 motion_detector.update(None)
+            if blink_detector is not None:
+                blink_detector.update(None)
             return FaceMetrics(face_detected=False)
 
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -259,16 +244,24 @@ class LivenessEngine:
         if not result.face_landmarks:
             if motion_detector is not None:
                 motion_detector.update(None)
+            if blink_detector is not None:
+                blink_detector.update(None)
             return FaceMetrics(face_detected=False)
 
         if len(result.face_landmarks) > 1:
             if motion_detector is not None:
                 motion_detector.update(None)
+            if blink_detector is not None:
+                blink_detector.update(None)
             return FaceMetrics(face_detected=False)
 
         landmarks = result.face_landmarks[0]
         h, w = frame.shape[:2]
         motion = motion_detector.update(landmarks) if motion_detector is not None else None
+        blink = (
+            blink_detector.update(landmarks, image_size=(w, h))
+            if blink_detector is not None else None
+        )
 
         yaw_proxy   = self._compute_yaw_proxy(landmarks)
         blink_score = self._compute_blink_score(result, landmarks)
@@ -281,6 +274,9 @@ class LivenessEngine:
         bs = self.extract_blendshapes(result)
         metrics = FaceMetrics(
             face_detected=True,
+            blink_detected=bool(blink and blink.blink),
+            blink_count=int(blink.count) if blink else 0,
+            blink_confidence=float(blink.blink_confidence) if blink and blink.blink else 0.0,
             motion_detected=bool(motion and motion["motion_detected"]),
             movement_score=float(motion["movement_score"]) if motion else 0.0,
             yaw_proxy=round(yaw_proxy, 4),
@@ -305,10 +301,8 @@ class LivenessEngine:
 
     def _compute_yaw_proxy(self, landmarks) -> float:
         """
-        Symmetric ratio of nose-to-eye distances.
-        ~0   = facing forward
-        < 0  = person turned LEFT  (nose moves toward lower x in mirrored frame)
-        > 0  = person turned RIGHT (nose moves toward higher x in mirrored frame)
+        Symmetric ratio of nose-to-eye distances, retained only as an rPPG
+        frame-stability signal. It is not used to select or pass challenges.
         """
         nose      = landmarks[NOSE_TIP]
         left_eye  = landmarks[LEFT_EYE_OUTER]

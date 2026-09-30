@@ -6,11 +6,9 @@ from enum import Enum
 # ── Liveness ──────────────────────────────────────────────────────────────────
 
 class ChallengeType(str, Enum):
-    TURN_LEFT  = "TURN_LEFT"
-    TURN_RIGHT = "TURN_RIGHT"
     BLINK      = "BLINK"
-    SMILE      = "SMILE"
-    MOUTH_OPEN = "MOUTH_OPEN"
+    OPEN_MOUTH = "OPEN_MOUTH"
+    BLINK_TWICE = "BLINK_TWICE"
     COMPLETE   = "COMPLETE"
     FAILED     = "FAILED"
 
@@ -24,17 +22,15 @@ class SessionState(str, Enum):
 
 
 CHALLENGE_SEQUENCE = [
-    ChallengeType.TURN_LEFT,
-    ChallengeType.TURN_RIGHT,
-    ChallengeType.MOUTH_OPEN,
+    ChallengeType.BLINK,
+    ChallengeType.OPEN_MOUTH,
+    ChallengeType.BLINK_TWICE,
 ]
 
 CHALLENGE_INSTRUCTIONS = {
-    ChallengeType.TURN_LEFT:  "Slowly turn your head to the LEFT",
-    ChallengeType.TURN_RIGHT: "Now turn your head to the RIGHT",
-    ChallengeType.BLINK:      "Please blink slowly",
-    ChallengeType.SMILE:      "Now give us a big SMILE",
-    ChallengeType.MOUTH_OPEN: "Open your mouth slightly",
+    ChallengeType.BLINK:       "Please blink slowly",
+    ChallengeType.OPEN_MOUTH:  "Open your mouth slightly",
+    ChallengeType.BLINK_TWICE: "Please blink twice",
     ChallengeType.COMPLETE:   "Verification complete!",
     ChallengeType.FAILED:     "Verification failed. Please try again.",
 }
@@ -42,6 +38,9 @@ CHALLENGE_INSTRUCTIONS = {
 
 class FaceMetrics(BaseModel):
     face_detected: bool
+    blink_detected: bool = False
+    blink_count: int = 0
+    blink_confidence: float = 0.0
     motion_detected: bool = False
     movement_score: float = 0.0
     yaw_proxy: float = 0.0

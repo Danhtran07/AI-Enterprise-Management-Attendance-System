@@ -687,8 +687,9 @@
 <!-- Footer -->
 <footer>
   <div class="steps">
-    <div class="step" id="step-0">← Left</div>
-    <div class="step" id="step-1">→ Right</div>
+    <div class="step" id="step-0">Blink</div>
+    <div class="step" id="step-1">Open Mouth</div>
+    <div class="step" id="step-2">Blink Twice</div>
   </div>
   <div id="feedback-text">Click Start to begin</div>
   <div id="token-area"></div>
@@ -1004,7 +1005,7 @@ function onMessage(data) {
     pillTxt.textContent = "Sampling";
   } else {
     dot.className = "pill-dot paused";
-    pillTxt.textContent = m.rppg_ready ? "Paused (movement)" : "Paused (head turn)";
+    pillTxt.textContent = m.rppg_ready ? "Paused (movement)" : "Paused (face movement)";
   }
   $("sample-count-label").textContent = `${samples} / ${MIN_SAMPLES} samples`;
   $("sample-bar").style.width = Math.min(100, (samples / MIN_SAMPLES) * 100) + "%";
@@ -1095,7 +1096,7 @@ function onMessage(data) {
 
 // ── Challenge steps ───────────────────────────────
 function updateSteps(idx, challenge) {
-  [0, 1].forEach(i => {
+  [0, 1, 2].forEach(i => {
     const el = $("step-" + i);
     el.classList.remove("active", "done");
     if (i < idx) el.classList.add("done");
@@ -1111,7 +1112,7 @@ $("start-btn").addEventListener("click", async () => {
   greenBuf  = new Array(WAVE_LEN).fill(null);
   pausedBuf = new Array(WAVE_LEN).fill(false);
   drawWave();
-  [0,1].forEach(i => $("step-"+i).classList.remove("active","done"));
+  [0,1,2].forEach(i => $("step-"+i).classList.remove("active","done"));
   $("color-swatch").style.background = "#1a2030";
   $("rgb-vals").innerHTML = '<div><span class="rgb-r">R</span> —</div><div><span class="rgb-g">G</span> —</div><div><span class="rgb-b">B</span> —</div>';
   overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);

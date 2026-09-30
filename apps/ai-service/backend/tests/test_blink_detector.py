@@ -7,10 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from blink_detector import (  # noqa: E402
     BlinkConfig,
     BlinkDetector,
-    LEFT_CHEEK,
     LEFT_EYE,
-    NOSE_TIP,
-    RIGHT_CHEEK,
     RIGHT_EYE,
 )
 
@@ -19,16 +16,12 @@ from blink_detector import (  # noqa: E402
 # Helpers
 # ============================================================
 
-def landmarks_for_ear(ear: float, *, left=None, right=None, scale=1.0, nose_x=0.5):
+def landmarks_for_ear(ear: float, *, left=None, right=None, scale=1.0):
     """
     Tạo 478 landmark giả với EAR chính xác = `ear` (mỗi mắt có thể chỉnh riêng).
     - scale: phóng to/thu nhỏ hình học mắt (EAR không đổi)
-    - nose_x: dịch mũi ngang để giả lập quay đầu (0.5 = nhìn thẳng)
     """
     lm = [SimpleNamespace(x=0.0, y=0.0) for _ in range(478)]
-    lm[NOSE_TIP] = SimpleNamespace(x=nose_x, y=0.5)
-    lm[LEFT_CHEEK] = SimpleNamespace(x=0.2, y=0.5)
-    lm[RIGHT_CHEEK] = SimpleNamespace(x=0.8, y=0.5)
 
     def build(indices, e, x0):
         outer, upper_a, upper_b, inner, lower_a, lower_b = indices
@@ -120,6 +113,17 @@ def test_blink_requires_open_closed_open_sequence():
     assert 0.03 <= result.blink_duration <= 0.8
 
 
+def test_blink_detection_does_not_require_head_pose_landmarks():
+    h = Harness()
+    # The fixture supplies eye points only; no nose/cheek geometry is needed.
+    h.feed([0.30])
+    h.feed([0.05])
+
+    result = h.feed([0.30])[0]
+
+    assert result.blink is True
+
+
 def test_multi_frame_blink_is_counted_exactly_once():
     h = Harness()
     results = h.feed([0.30] * 5 + [0.20, 0.08, 0.05, 0.08, 0.20] + [0.30] * 5)
@@ -186,15 +190,6 @@ def test_accepts_mediapipe_style_object_with_landmark_attribute():
     wrapped = SimpleNamespace(landmark=landmarks_for_ear(0.30))
     result = h.det.update(wrapped, timestamp=h.t + 0.03)
     assert result.valid is True
-
-
-def test_head_turn_is_rejected():
-    h = Harness()
-    lm = landmarks_for_ear(0.30, nose_x=0.7)      # quay đầu mạnh
-    result = h.det.update(lm, timestamp=h.t + 0.03)
-
-    assert result.valid is False
-    assert result.reason == "head_pose"
 
 
 def test_losing_face_mid_blink_does_not_count_and_keeps_baseline():

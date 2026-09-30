@@ -26,7 +26,7 @@ type CheckInState =
   | "failure";
 
 const LIVENESS_SESSION_KEY = "liveness_session_id";
-const FAST_ATTENDANCE = true;
+const FAST_ATTENDANCE = false;
 const FACE_LANDMARKER_MODEL =
   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
 

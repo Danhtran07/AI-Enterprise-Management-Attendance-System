@@ -8,10 +8,6 @@ import dataclasses
 import numpy as np
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from pathlib import Path
-
-CAPTURES_DIR = Path(__file__).parent / "captures"
-CAPTURES_DIR.mkdir(exist_ok=True)
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -46,8 +42,9 @@ from models import (
     BackendRecognitionResponse, RecognitionFeedbackRequest,
     RecognitionMetricsResponse,
 )
-from challenge_evaluator import is_neutral, evaluate_challenge
+from challenge_evaluator import evaluate_challenge
 from liveness_engine import LivenessEngine
+from blink_detector import BlinkDetector
 from session_manager import session_manager, SPOOF_FRAMES_REQUIRED
 from face_recognition_engine import FaceRecognitionEngine, SIMILARITY_THRESHOLD
 from face_db import face_db
@@ -107,6 +104,7 @@ rppg_engines: dict[str, RPPGEngine] = {}
 # inter-frame head movement and discard motion-corrupted samples.
 rppg_last_pos: dict[str, tuple[float, float]] = {}
 motion_detectors: dict[str, MotionDetector] = {}
+blink_detectors: dict[str, BlinkDetector] = {}
 
 
 # ── Health check ──────────────────────────────────────────────────────────────
@@ -286,7 +284,15 @@ async def liveness_websocket(websocket: WebSocket, session_id: str):
             if motion_detector is None:
                 motion_detector = MotionDetector()
                 motion_detectors[session_id] = motion_detector
-            metrics = engine.process_frame(frame_bytes, motion_detector=motion_detector)
+            blink_detector = blink_detectors.get(session_id)
+            if blink_detector is None:
+                blink_detector = BlinkDetector()
+                blink_detectors[session_id] = blink_detector
+            metrics = engine.process_frame(
+                frame_bytes,
+                motion_detector=motion_detector,
+                blink_detector=blink_detector,
+            )
 
             # Feed rPPG engine.
             # We only accept a sample when the face is:
@@ -342,9 +348,9 @@ async def liveness_websocket(websocket: WebSocket, session_id: str):
             current_challenge = session.current_challenge
 
             if session.consecutive_count % 15 == 0:
-                logger.debug("challenge=%s yaw=%.3f blink=%.3f smile=%.3f consec=%d",
-                             current_challenge.value, metrics.yaw_proxy,
-                             metrics.blink_score, metrics.smile_score,
+                logger.debug("challenge=%s blink=%s blink_count=%d mouth=%.3f consec=%d",
+                             current_challenge.value, metrics.blink_detected,
+                             metrics.blink_count, metrics.mouth_open_score,
                              session.consecutive_count)
 
             # No face — don't terminate, just guide the user back into frame
@@ -368,30 +374,17 @@ async def liveness_websocket(websocket: WebSocket, session_id: str):
                                      metrics)
                 break
 
-            # After a head-turn, wait for the face to return to neutral first
-            if session.waiting_for_neutral:
-                if is_neutral(metrics):
-                    session.waiting_for_neutral = False
-                else:
-                    await _send_response(websocket, session_id, current_challenge,
-                                         session.challenge_index, False,
-                                         "Good! Now face forward again...", metrics)
-                    continue
-
             # Evaluate current challenge
             challenge_passed, new_count = evaluate_challenge(
-                current_challenge, metrics, session.consecutive_count
+                current_challenge,
+                metrics,
+                session.consecutive_count,
+                session.blink_count_at_challenge_start,
             )
             session.consecutive_count = new_count
 
             if challenge_passed:
-                # Save smile photo before advancing (smile is the last challenge, index 2)
-                if current_challenge == ChallengeType.SMILE:
-                    photo_path = CAPTURES_DIR / f"{session_id}.jpg"
-                    photo_path.write_bytes(frame_bytes)
-                    session.smile_photo_path = str(photo_path)
-
-                session.advance_challenge()
+                session.advance_challenge(metrics.blink_count)
 
                 if session.challenge_index >= len(CHALLENGE_SEQUENCE):
                     session.state = SessionState.COMPLETE
@@ -432,6 +425,7 @@ async def liveness_websocket(websocket: WebSocket, session_id: str):
         rppg_engines.pop(session_id, None)
         rppg_last_pos.pop(session_id, None)
         motion_detectors.pop(session_id, None)
+        blink_detectors.pop(session_id, None)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
