@@ -55,6 +55,7 @@ from emotion_engine import blendshapes_to_emotions, dominant_emotion
 from rppg_engine import RPPGEngine
 from photo_validator import PhotoValidator
 from recognition_metrics import RecognitionMetrics
+from liveness.motion_detector import MotionDetector
 
 # ── JWT config ────────────────────────────────────────────────────────────────
 JWT_SECRET = os.getenv("JWT_SECRET", "change-me-in-production")
@@ -105,6 +106,7 @@ rppg_engines: dict[str, RPPGEngine] = {}
 # Per-session last ROI center position (normalized 0-1) — used to detect
 # inter-frame head movement and discard motion-corrupted samples.
 rppg_last_pos: dict[str, tuple[float, float]] = {}
+motion_detectors: dict[str, MotionDetector] = {}
 
 
 # ── Health check ──────────────────────────────────────────────────────────────
@@ -280,7 +282,11 @@ async def liveness_websocket(websocket: WebSocket, session_id: str):
                 break
 
             # Process frame with MediaPipe
-            metrics = engine.process_frame(frame_bytes)
+            motion_detector = motion_detectors.get(session_id)
+            if motion_detector is None:
+                motion_detector = MotionDetector()
+                motion_detectors[session_id] = motion_detector
+            metrics = engine.process_frame(frame_bytes, motion_detector=motion_detector)
 
             # Feed rPPG engine.
             # We only accept a sample when the face is:
@@ -425,6 +431,7 @@ async def liveness_websocket(websocket: WebSocket, session_id: str):
     finally:
         rppg_engines.pop(session_id, None)
         rppg_last_pos.pop(session_id, None)
+        motion_detectors.pop(session_id, None)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

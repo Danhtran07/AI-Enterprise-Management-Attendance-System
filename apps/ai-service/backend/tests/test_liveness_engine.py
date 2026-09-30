@@ -54,6 +54,16 @@ def test_open_mouth_is_next_challenge_and_keeps_checks():
     assert result["live"] is False
 
 
+def test_engine_accepts_motion_detector_output_as_score_input():
+    result = make_engine().process(
+        {"blink": True, "blink_count": 1, "confidence": 0.95},
+        {"mouth_open": False, "confidence": 0.0},
+        {"motion_detected": True, "movement_score": 0.9},
+    )
+
+    assert result["score"] == 0.94
+
+
 def test_live_requires_all_challenges_and_threshold():
     engine = make_engine()
     first = engine.process({"blink": True, "blink_count": 1, "confidence": 1.0}, {})

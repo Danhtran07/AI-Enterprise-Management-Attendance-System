@@ -5,6 +5,7 @@ from pathlib import Path
 
 if TYPE_CHECKING:
     from models import FaceMetrics
+    from liveness.motion_detector import MotionDetector
 
 # MediaPipe landmark indices
 NOSE_TIP = 1
@@ -145,7 +146,8 @@ class LivenessEngine:
             face_landmarker = mp_vision.FaceLandmarker.create_from_options(options)
         self.detector = face_landmarker
 
-    def process(self, blink_result: Any, mouth_result: Any) -> dict[str, Any]:
+    def process(self, blink_result: Any, mouth_result: Any,
+                motion_result: Any | None = None) -> dict[str, Any]:
         """Aggregate detector outputs and advance the injected challenge policy.
 
         Results may be mappings or detector result objects. Blink detectors
@@ -164,7 +166,14 @@ class LivenessEngine:
         ))
         mouth_open = bool(self._value(mouth_result, "mouth_open", False))
         mouth_confidence = self._bounded_float(self._value(mouth_result, "confidence", 0.0))
-        motion_score = self._bounded_float(self._value(blink_result, "motion_score", 1.0 if blink_detected else 0.0))
+        motion_raw = self._value(motion_result, "movement_score", None)
+        if motion_raw is None:
+            motion_raw = self._value(blink_result, "motion_score", 1.0 if blink_detected else 0.0)
+        motion_score = self._bounded_float(motion_raw)
+        if motion_result is not None and not bool(
+            self._value(motion_result, "motion_detected", False)
+        ):
+            motion_score = 0.0
 
         challenge_passed = False
         if not manager.complete:
@@ -227,7 +236,8 @@ class LivenessEngine:
         except (TypeError, ValueError):
             return 0
 
-    def process_frame(self, jpeg_bytes: bytes) -> "FaceMetrics":
+    def process_frame(self, jpeg_bytes: bytes,
+                      motion_detector: "MotionDetector | None" = None) -> "FaceMetrics":
         """
         Process one JPEG frame. Returns a fully populated FaceMetrics including
         forehead_rgb and forehead_bbox_norm when a face is detected.
@@ -238,6 +248,8 @@ class LivenessEngine:
         nparr = np.frombuffer(jpeg_bytes, np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         if frame is None:
+            if motion_detector is not None:
+                motion_detector.update(None)
             return FaceMetrics(face_detected=False)
 
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -245,13 +257,18 @@ class LivenessEngine:
         result = self.detector.detect(mp_image)
 
         if not result.face_landmarks:
+            if motion_detector is not None:
+                motion_detector.update(None)
             return FaceMetrics(face_detected=False)
 
         if len(result.face_landmarks) > 1:
+            if motion_detector is not None:
+                motion_detector.update(None)
             return FaceMetrics(face_detected=False)
 
         landmarks = result.face_landmarks[0]
         h, w = frame.shape[:2]
+        motion = motion_detector.update(landmarks) if motion_detector is not None else None
 
         yaw_proxy   = self._compute_yaw_proxy(landmarks)
         blink_score = self._compute_blink_score(result, landmarks)
@@ -264,6 +281,8 @@ class LivenessEngine:
         bs = self.extract_blendshapes(result)
         metrics = FaceMetrics(
             face_detected=True,
+            motion_detected=bool(motion and motion["motion_detected"]),
+            movement_score=float(motion["movement_score"]) if motion else 0.0,
             yaw_proxy=round(yaw_proxy, 4),
             blink_score=round(blink_score, 4),
             smile_score=round(smile_score, 4),

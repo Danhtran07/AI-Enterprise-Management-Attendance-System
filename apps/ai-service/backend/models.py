@@ -42,6 +42,8 @@ CHALLENGE_INSTRUCTIONS = {
 
 class FaceMetrics(BaseModel):
     face_detected: bool
+    motion_detected: bool = False
+    movement_score: float = 0.0
     yaw_proxy: float = 0.0
     blink_score: float = 0.0
     smile_score: float = 0.0
