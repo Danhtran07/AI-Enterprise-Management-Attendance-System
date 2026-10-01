@@ -58,5 +58,8 @@ services:
     ports:
       - "${AI_SERVICE_HOST_PORT:-8002}:8000"
 
+    volumes:
+      - ./apps/ai-service/.insightface:/root/.insightface
+
 volumes:
   postgres_data:
