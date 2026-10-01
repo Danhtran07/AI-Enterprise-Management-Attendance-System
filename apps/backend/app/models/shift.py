@@ -69,7 +69,6 @@ class Shift(Base):
         Integer,
         nullable=False,
         default=90,
-        server_default="90",
     )
 
     is_overnight: Mapped[bool] = mapped_column(

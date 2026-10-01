@@ -7,7 +7,6 @@ export interface Shift {
   end_time: string;
   late_tolerance_minutes: number;
   early_checkin_minutes: number;
-  checkin_close_minutes: number;
   is_overnight: boolean;
   is_active: boolean;
 }

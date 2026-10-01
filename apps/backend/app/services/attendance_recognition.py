@@ -8,13 +8,15 @@ from app.models.attendance import Attendance, AttendanceStatus
 from app.models.employee import Employee
 from app.schemas.ai import AIRecognitionResult
 from app.services.attendance_policy import (
-    CheckInWindowState,
     calculate_attendance_metrics,
     calculate_attendance_status,
+)
+from app.services.shift_hours import (
+    CheckInWindowState,
     format_clock,
     get_shift_check_in_window,
 )
-from app.services.shift_resolver import resolve_shift
+from app.services.shift_resolver import resolve_shift, resolve_shift_for_punch
 
 
 class RecognitionRejectedError(Exception):
@@ -37,7 +39,7 @@ def compute_attendance_status(
         return AttendanceStatus.ABSENT
 
     local_check_in = to_vietnam_time(check_in)
-    shift = resolve_shift(db, employee_id, local_check_in.date())
+    shift, _date, _continuation = resolve_shift_for_punch(db, employee_id, local_check_in)
     return calculate_attendance_status(check_in, shift)
 
 
@@ -62,8 +64,12 @@ def record_recognition_attendance(
         raise RecognitionRejectedError("Employee not found", 404)
 
     server_now = now or datetime.now(timezone.utc)
-    local_date = to_vietnam_time(server_now).date()
-    shift = resolve_shift(db, employee.id, local_date)
+    local_now = to_vietnam_time(server_now)
+    shift, local_date, _continuation = resolve_shift_for_punch(
+        db,
+        employee.id,
+        local_now,
+    )
     attendance_status = calculate_attendance_status(server_now, shift)
     metrics = calculate_attendance_metrics(server_now, None, shift)
     attendance = (
@@ -74,12 +80,6 @@ def record_recognition_attendance(
         )
         .first()
     )
-
-    if attendance is not None and attendance.check_in is None:
-        raise RecognitionRejectedError(
-            "Today is already marked absent, so check-in and check-out are locked",
-            409,
-        )
 
     if attendance is None:
         _reject_if_check_in_closed(db, employee.id, shift, local_date, server_now)

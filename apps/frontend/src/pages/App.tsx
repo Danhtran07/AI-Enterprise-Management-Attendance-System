@@ -10,7 +10,6 @@ import {
 import ErrorState from "../components/ErrorState";
 import LoadingState from "../components/LoadingState";
 import { getApiErrorMessage } from "../api/error";
-import { drawMirroredVideoFrame } from "../utils/cameraMirror";
 import {
   createLivenessSession,
   recognizeAttendance,
@@ -254,7 +253,7 @@ export default function App() {
           canvas.height = currentVideo.videoHeight;
           const context = canvas.getContext("2d");
           if (!context) return;
-          drawMirroredVideoFrame(context, currentVideo, canvas.width, canvas.height);
+          context.drawImage(currentVideo, 0, 0, canvas.width, canvas.height);
           canvas.toBlob((blob) => {
             if (blob && socket.readyState === WebSocket.OPEN) socket.send(blob);
           }, "image/jpeg", 0.75);

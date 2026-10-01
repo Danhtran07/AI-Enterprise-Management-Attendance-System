@@ -27,7 +27,6 @@ import {
 import {
   evaluateFaceCaptureQuality,
 } from "../utils/faceQuality";
-import { drawMirroredVideoFrame } from "../utils/cameraMirror";
 
 import type {
   Employee,
@@ -684,7 +683,7 @@ export default function Employees() {
           canvas.height = video.videoHeight;
           const context = canvas.getContext("2d");
           if (!context) return;
-          drawMirroredVideoFrame(context, video, canvas.width, canvas.height);
+          context.drawImage(video, 0, 0, canvas.width, canvas.height);
           canvas.toBlob((blob) => {
             if (blob && socket.readyState === WebSocket.OPEN) socket.send(blob);
           }, "image/jpeg", 0.75);
@@ -1030,11 +1029,11 @@ export default function Employees() {
                 autoPlay
                 muted
                 playsInline
-                className="h-[420px] w-full scale-x-[-1] object-cover"
+                className="h-[420px] w-full object-cover"
               />
               <canvas
                 id="enrollment-mesh-canvas"
-                className="pointer-events-none absolute inset-0 h-full w-full scale-x-[-1] object-cover"
+                className="pointer-events-none absolute inset-0 h-full w-full object-cover"
               />
               <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-center p-4">
                 <span className="rounded-full bg-slate-950/70 px-4 py-2 text-sm font-semibold text-white backdrop-blur">
