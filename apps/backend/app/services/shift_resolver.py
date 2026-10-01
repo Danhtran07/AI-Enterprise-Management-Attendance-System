@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timedelta
 
 from sqlalchemy.orm import Session
 
@@ -41,3 +41,18 @@ def resolve_shift(
         return None
 
     return rule.shift
+
+
+def resolve_shift_for_punch(
+    db: Session,
+    employee_id: int,
+    local_now: datetime,
+) -> tuple[Shift | None, date, bool]:
+    """Return the shift that is actually in progress, including overnight spillover."""
+    local_date = local_now.date()
+    local_time = local_now.timetz().replace(tzinfo=None) if local_now.tzinfo else local_now.time()
+    previous_date = local_date - timedelta(days=1)
+    previous = resolve_shift(db, employee_id, previous_date)
+    if previous is not None and previous.is_overnight and local_time < previous.end_time:
+        return previous, previous_date, True
+    return resolve_shift(db, employee_id, local_date), local_date, False
