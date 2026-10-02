@@ -130,7 +130,12 @@ def utc(year: int, month: int, day: int, hour: int, minute: int = 0):
     return datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
 
 
-def test_creates_morning_afternoon_and_night_shifts(db_session, shifts):
+def test_classifies_office_day_and_night_hours():
+    from app.services.shift_hours import ShiftKind, classify_shift_kind
+
+    assert classify_shift_kind(time(8, 0), time(17, 0)) is ShiftKind.DAY
+    assert classify_shift_kind(time(16, 0), time(23, 0)) is ShiftKind.NIGHT
+    assert classify_shift_kind(time(22, 0), time(6, 0), overnight=True) is ShiftKind.NIGHT
     morning, afternoon, night = shifts
 
     assert (morning.start_time, morning.end_time) == (time(8, 0), time(17, 0))

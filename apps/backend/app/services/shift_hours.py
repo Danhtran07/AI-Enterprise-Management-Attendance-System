@@ -41,10 +41,8 @@ def classify_shift_kind(
     overnight: bool | None = None,
 ) -> ShiftKind:
     overnight = is_overnight_hours(start_time, end_time) if overnight is None else overnight
-    if overnight or start_time.hour >= 22:
+    if overnight or start_time.hour >= 16:
         return ShiftKind.NIGHT
-    if start_time.hour >= 16:
-        return ShiftKind.EVENING
     return ShiftKind.DAY
 
 
