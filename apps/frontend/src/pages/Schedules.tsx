@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
-import { CalendarDays, Clock3, MoonStar, ShieldCheck } from "lucide-react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { CalendarDays, Clock3, MoonStar, Plus, ShieldCheck, Trash2 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
 import ErrorState from "../components/ErrorState";
 import LoadingState from "../components/LoadingState";
 import { getApiErrorMessage } from "../api/error";
-import { getSchedules, getShifts } from "../api/schedule.api";
-import type { Shift, WorkSchedule } from "../types/schedule";
+import { createShift, deactivateShift, getSchedules, getShifts } from "../api/schedule.api";
+import type { Shift, ShiftPayload, WorkSchedule } from "../types/schedule";
+import { SHIFT_TEMPLATES, type ShiftTemplateId } from "../utils/shiftTemplates";
 
 const days = [
   "Monday",
@@ -38,6 +39,18 @@ export default function Schedules() {
   const [schedules, setSchedules] = useState<WorkSchedule[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [createError, setCreateError] = useState("");
+  const [shiftActionError, setShiftActionError] = useState("");
+  const [updatingShiftId, setUpdatingShiftId] = useState<number | null>(null);
+  const [savingShift, setSavingShift] = useState(false);
+  const [template, setTemplate] = useState<ShiftTemplateId>("day");
+  const [shiftForm, setShiftForm] = useState({
+    name: "Day office",
+    code: "DAY-OFFICE",
+    start_time: SHIFT_TEMPLATES.day.start,
+    end_time: SHIFT_TEMPLATES.day.end,
+    description: "",
+  });
 
   async function loadWorkConfig() {
     try {
@@ -71,6 +84,57 @@ export default function Schedules() {
 
   function setTab(next: WorkConfigTab) {
     setSearchParams(next === "schedules" ? {} : { tab: next }, { replace: true });
+  }
+
+  function selectTemplate(value: ShiftTemplateId) {
+    setTemplate(value);
+    const preset = SHIFT_TEMPLATES[value];
+    setShiftForm((current) => ({
+      ...current,
+      name: value === "day" ? "Day office" : "Night shift",
+      code: value === "day" ? "DAY-OFFICE" : "NIGHT-SHIFT",
+      start_time: preset.start,
+      end_time: preset.end,
+    }));
+  }
+
+  async function handleCreateShift(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setCreateError("");
+    setSavingShift(true);
+    const payload: ShiftPayload = {
+      ...shiftForm,
+      start_time: `${shiftForm.start_time}:00`,
+      end_time: `${shiftForm.end_time}:00`,
+      late_tolerance_minutes: 15,
+      early_checkin_minutes: 30,
+      checkin_close_minutes: 90,
+      is_active: true,
+    };
+    try {
+      const created = await createShift(payload);
+      setShifts((current) => [...current, created].sort((a, b) => a.start_time.localeCompare(b.start_time)));
+      setShiftForm({ name: "Day office", code: "DAY-OFFICE", start_time: "08:00", end_time: "17:00", description: "" });
+      setTemplate("day");
+    } catch (err) {
+      setCreateError(getApiErrorMessage(err, "Unable to create shift."));
+    } finally {
+      setSavingShift(false);
+    }
+  }
+
+  async function handleDeactivateShift(shift: Shift) {
+    if (!shift.is_active) return;
+    setShiftActionError("");
+    setUpdatingShiftId(shift.id);
+    try {
+      const updated = await deactivateShift(shift.id);
+      setShifts((current) => current.map((item) => item.id === updated.id ? updated : item));
+    } catch (err) {
+      setShiftActionError(getApiErrorMessage(err, "Unable to remove this shift."));
+    } finally {
+      setUpdatingShiftId(null);
+    }
   }
 
   if (loading) return <LoadingState message="Loading work configuration..." />;
@@ -136,13 +200,48 @@ export default function Schedules() {
             </div>
           </div>
 
+          <form onSubmit={handleCreateShift} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-4 flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-600"><Plus size={20} /></div>
+              <div><h2 className="font-bold text-slate-900">Add a shift</h2><p className="text-sm text-slate-500">Choose a preset, then adjust the hours as needed.</p></div>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <label className="text-sm font-semibold text-slate-700">Shift type
+                <select value={template} onChange={(event) => selectTemplate(event.target.value as ShiftTemplateId)} className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 font-normal">
+                  <option value="day">Day office (08:00–17:00)</option>
+                  <option value="night">Night shift (16:00–23:00)</option>
+                </select>
+              </label>
+              <label className="text-sm font-semibold text-slate-700">Shift name
+                <input required maxLength={100} value={shiftForm.name} onChange={(event) => setShiftForm({ ...shiftForm, name: event.target.value })} className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2.5 font-normal" />
+              </label>
+              <label className="text-sm font-semibold text-slate-700">Code
+                <input required maxLength={50} value={shiftForm.code} onChange={(event) => setShiftForm({ ...shiftForm, code: event.target.value })} className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2.5 font-normal" />
+              </label>
+              <label className="text-sm font-semibold text-slate-700">Start time
+                <input required type="time" value={shiftForm.start_time} onChange={(event) => setShiftForm({ ...shiftForm, start_time: event.target.value })} className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2.5 font-normal" />
+              </label>
+              <label className="text-sm font-semibold text-slate-700">End time
+                <input required type="time" value={shiftForm.end_time} onChange={(event) => setShiftForm({ ...shiftForm, end_time: event.target.value })} className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2.5 font-normal" />
+              </label>
+              <label className="text-sm font-semibold text-slate-700">Description (optional)
+                <input value={shiftForm.description} onChange={(event) => setShiftForm({ ...shiftForm, description: event.target.value })} className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2.5 font-normal" />
+              </label>
+            </div>
+            {createError && <p role="alert" className="mt-3 text-sm text-rose-600">{createError}</p>}
+            <button type="submit" disabled={savingShift} className="mt-4 inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60">
+              <Plus size={16} /> {savingShift ? "Adding shift..." : "Add shift"}
+            </button>
+          </form>
+
           <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
             <div className="border-b border-slate-100 px-5 py-4">
               <h2 className="font-bold text-slate-900">Shift library</h2>
               <p className="mt-1 text-sm text-slate-500">
-                Policy values are captured in attendance records when employees check in.
+                Removing a shift makes it unavailable for future assignment while preserving past records.
               </p>
             </div>
+            {shiftActionError && <p role="alert" className="border-b border-rose-100 bg-rose-50 px-5 py-3 text-sm text-rose-700">{shiftActionError}</p>}
             {shifts.length === 0 ? (
               <div className="px-5 py-16 text-center text-sm text-slate-500">
                 No shifts have been configured yet.
@@ -193,6 +292,17 @@ export default function Schedules() {
                         </p>
                       </div>
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => void handleDeactivateShift(shift)}
+                      disabled={!shift.is_active || updatingShiftId === shift.id}
+                      aria-label={`Remove ${shift.name}`}
+                      title={shift.is_active ? "Remove shift" : "Shift already removed"}
+                      className="inline-flex items-center justify-center gap-2 self-start rounded-lg border border-rose-200 px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-40 md:self-center"
+                    >
+                      <Trash2 size={16} />
+                      {updatingShiftId === shift.id ? "Removing..." : "Remove"}
+                    </button>
                   </article>
                 ))}
               </div>
