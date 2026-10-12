@@ -87,6 +87,7 @@ def get_employees(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _require_admin(current_user)
     return db.query(Employee).all()
 
 

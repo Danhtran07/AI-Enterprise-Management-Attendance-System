@@ -23,4 +23,4 @@ dist/
 .insightface/
 
 # Logs
-*.lognode_modules/
+*.log

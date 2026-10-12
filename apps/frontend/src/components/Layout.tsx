@@ -9,7 +9,6 @@ import { useState } from "react";
 import {
   CalendarCheck2,
   CalendarDays,
-  Clock3,
   LayoutDashboard,
   LogOut,
   ScanFace,
@@ -69,9 +68,9 @@ const isUsersActive =
     "/users"
   );
 
-  const isShiftsActive = location.pathname.startsWith("/shifts");
-  const isSchedulesActive = location.pathname.startsWith("/schedules");
-  const isMyScheduleActive = location.pathname.includes("schedule");
+  const isWorkConfigActive =
+    location.pathname.startsWith("/schedules") ||
+    location.pathname.startsWith("/shifts");
 
 
   function handleLogout() {
@@ -400,23 +399,19 @@ const isUsersActive =
   </span>
 
   <span>
-    {role === "ADMIN" ? "Attendance Calendar" : "My Attendance"}
+    {role === "ADMIN" ? "Attendance Calendar" : "My Calendar"}
   </span>
 </Link>
-{role === "ADMIN" && (<>
-  <Link to="/shifts" onClick={closeMobileMenu} className={`mb-1 flex items-center gap-3 rounded-xl px-3.5 py-3 text-sm font-semibold no-underline transition ${isShiftsActive ? "bg-blue-50 text-blue-600" : "text-slate-600 hover:bg-slate-50 hover:text-blue-600"}`}>
-    <span className={`flex h-9 w-9 items-center justify-center rounded-lg ${isShiftsActive ? "bg-white text-blue-600" : "bg-slate-100 text-slate-500"}`}><Clock3 size={18} strokeWidth={2} /></span>
-    <span>Shifts</span>
-  </Link>
-  <Link to="/schedules" onClick={closeMobileMenu} className={`mb-1 flex items-center gap-3 rounded-xl px-3.5 py-3 text-sm font-semibold no-underline transition ${isSchedulesActive ? "bg-blue-50 text-blue-600" : "text-slate-600 hover:bg-slate-50 hover:text-blue-600"}`}>
-    <span className={`flex h-9 w-9 items-center justify-center rounded-lg ${isSchedulesActive ? "bg-white text-blue-600" : "bg-slate-100 text-slate-500"}`}><CalendarDays size={18} strokeWidth={2} /></span>
-    <span>Schedules</span>
-  </Link>
-</>)}
-{role !== "ADMIN" && (
-  <Link to="/my-schedule" onClick={closeMobileMenu} className={`mb-1 flex items-center gap-3 rounded-xl px-3.5 py-3 text-sm font-semibold no-underline transition ${isMyScheduleActive ? "bg-blue-50 text-blue-600" : "text-slate-600 hover:bg-slate-50 hover:text-blue-600"}`}>
-    <span className={`flex h-9 w-9 items-center justify-center rounded-lg ${isMyScheduleActive ? "bg-white text-blue-600" : "bg-slate-100 text-slate-500"}`}><CalendarDays size={18} strokeWidth={2} /></span>
-    <span>My Schedule</span>
+{role === "ADMIN" && (
+  <Link
+    to="/schedules"
+    onClick={closeMobileMenu}
+    className={`mb-1 flex items-center gap-3 rounded-xl px-3.5 py-3 text-sm font-semibold no-underline transition ${isWorkConfigActive ? "bg-blue-50 text-blue-600" : "text-slate-600 hover:bg-slate-50 hover:text-blue-600"}`}
+  >
+    <span className={`flex h-9 w-9 items-center justify-center rounded-lg ${isWorkConfigActive ? "bg-white text-blue-600" : "bg-slate-100 text-slate-500"}`}>
+      <CalendarDays size={18} strokeWidth={2} />
+    </span>
+    <span>Shifts & schedules</span>
   </Link>
 )}
 {role === "ADMIN" && (

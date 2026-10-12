@@ -19,9 +19,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN curl -fsSL -o face_landmarker.task \
     https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
 
-# Pre-download InsightFace buffalo_l (~500MB) so first startup isn't slow
-RUN python3 -c "from insightface.app import FaceAnalysis; FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider']).prepare(ctx_id=-1)" \
-    || echo "InsightFace pre-download failed — will retry at runtime"
+# Pre-download InsightFace buffalo_l from GitHub (Google Drive auto-download often 403s)
+RUN mkdir -p /root/.insightface/models \
+    && curl -fL -o /tmp/buffalo_l.zip \
+      https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip \
+    && python3 -c "import zipfile; zipfile.ZipFile('/tmp/buffalo_l.zip').extractall('/root/.insightface/models/buffalo_l')" \
+    && rm /tmp/buffalo_l.zip
 
 # Copy application code
 COPY backend/ .

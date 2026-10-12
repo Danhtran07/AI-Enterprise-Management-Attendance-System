@@ -17,15 +17,18 @@ else
 fi
 
 echo ""
-echo "Pre-downloading InsightFace buffalo_l (~500 MB)..."
-echo "This runs once and caches to ~/.insightface/"
-python3 -c "
-from insightface.app import FaceAnalysis
-print('Initialising InsightFace...')
-app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
-app.prepare(ctx_id=-1)
-print('✓ InsightFace buffalo_l ready')
-"
+echo "Pre-downloading InsightFace buffalo_l (~275 MB) from GitHub Releases..."
+MODEL_DIR="$HOME/.insightface/models/buffalo_l"
+mkdir -p "$MODEL_DIR"
+if [ -f "$MODEL_DIR/w600k_r50.onnx" ]; then
+    echo "✓ buffalo_l already cached"
+else
+    curl -fL --progress-bar -o /tmp/buffalo_l.zip \
+      https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip
+    python3 -c "import zipfile; zipfile.ZipFile('/tmp/buffalo_l.zip').extractall('$MODEL_DIR')"
+    rm -f /tmp/buffalo_l.zip
+    echo "✓ InsightFace buffalo_l ready"
+fi
 
 echo ""
 echo "All models ready. Run the API with:"

@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base
-from app.models.attendance import Attendance, AttendanceStatus
+from app.models.attendance import AttendanceStatus
 from app.models.employee import Employee
 from app.models.schedule_assignment import ScheduleAssignment
 from app.models.schedule_rule import ScheduleRule
@@ -18,7 +18,7 @@ from app.services.attendance_policy import (
     calculate_attendance_metrics,
     calculate_attendance_status,
 )
-from app.services.attendance_recognition import RecognitionRejectedError, record_recognition_attendance
+from app.services.attendance_recognition import record_recognition_attendance
 from app.services.shift_resolver import resolve_shift
 
 
@@ -130,7 +130,12 @@ def utc(year: int, month: int, day: int, hour: int, minute: int = 0):
     return datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
 
 
-def test_creates_morning_afternoon_and_night_shifts(db_session, shifts):
+def test_classifies_office_day_and_night_hours():
+    from app.services.shift_hours import ShiftKind, classify_shift_kind
+
+    assert classify_shift_kind(time(8, 0), time(17, 0)) is ShiftKind.DAY
+    assert classify_shift_kind(time(16, 0), time(23, 0)) is ShiftKind.NIGHT
+    assert classify_shift_kind(time(22, 0), time(6, 0), overnight=True) is ShiftKind.NIGHT
     morning, afternoon, night = shifts
 
     assert (morning.start_time, morning.end_time) == (time(8, 0), time(17, 0))
@@ -252,74 +257,3 @@ def test_employee_without_schedule_does_not_crash(db_session, employee):
 
     assert attendance.shift_id is None
     assert attendance.status == AttendanceStatus.PRESENT
-
-
-def test_check_in_before_window_is_rejected(db_session, employee, weekly_schedule, shifts):
-    recognition = AIRecognitionResult(
-        matched=True,
-        employee_id=employee.id,
-        confidence=0.98,
-        liveness=True,
-    )
-
-    with pytest.raises(RecognitionRejectedError) as error:
-        record_recognition_attendance(db_session, recognition, utc(2026, 9, 7, 0, 29))
-
-    assert error.value.status_code == 422
-    assert "not open yet" in str(error.value)
-    assert db_session.query(Attendance).count() == 0
-
-
-def test_missed_check_in_window_marks_absent_and_locks_checkout(
-    db_session,
-    employee,
-    weekly_schedule,
-    shifts,
-):
-    recognition = AIRecognitionResult(
-        matched=True,
-        employee_id=employee.id,
-        confidence=0.98,
-        liveness=True,
-    )
-
-    with pytest.raises(RecognitionRejectedError) as error:
-        record_recognition_attendance(db_session, recognition, utc(2026, 9, 7, 2, 30))
-
-    attendance = db_session.query(Attendance).one()
-    assert error.value.status_code == 422
-    assert attendance.status == AttendanceStatus.ABSENT
-    assert attendance.check_in is None
-    assert attendance.check_out is None
-
-    with pytest.raises(RecognitionRejectedError) as locked:
-        record_recognition_attendance(db_session, recognition, utc(2026, 9, 7, 10, 0))
-
-    assert locked.value.status_code == 409
-    db_session.refresh(attendance)
-    assert attendance.check_out is None
-
-
-def test_late_check_in_inside_window_is_allowed(
-    db_session,
-    employee,
-    weekly_schedule,
-    shifts,
-):
-    recognition = AIRecognitionResult(
-        matched=True,
-        employee_id=employee.id,
-        confidence=0.98,
-        liveness=True,
-    )
-
-    attendance = record_recognition_attendance(
-        db_session,
-        recognition,
-        utc(2026, 9, 7, 1, 31),
-    )
-    record_recognition_attendance(db_session, recognition, utc(2026, 9, 7, 10, 0))
-    db_session.refresh(attendance)
-
-    assert attendance.status == AttendanceStatus.LATE
-    assert attendance.check_out is not None

@@ -1,0 +1,20 @@
+@startuml
+
+start
+
+:Nhân viên mở hệ thống;
+
+:Đăng nhập;
+
+if (Thông tin hợp lệ?) then (Có)
+    :Truy cập hệ thống;
+else (Không)
+    :Hiển thị thông báo lỗi;
+    stop
+endif
+
+:Thực hiện điểm danh;
+
+stop
+
+@enduml

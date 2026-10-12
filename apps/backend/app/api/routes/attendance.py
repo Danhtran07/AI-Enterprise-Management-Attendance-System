@@ -45,7 +45,7 @@ from app.services.attendance_policy import (
     calculate_attendance_metrics,
     calculate_attendance_status,
 )
-from app.services.shift_resolver import resolve_shift
+from app.services.shift_resolver import resolve_shift, resolve_shift_for_punch
 
 
 router = APIRouter(
@@ -68,7 +68,12 @@ def _compute_status(
         return AttendanceStatus.ABSENT
 
     local_date = to_vietnam_time(check_in).date()
-    shift = resolve_shift(db, employee_id, local_date)
+    local_now = to_vietnam_time(check_in)
+    shift, _shift_date, _continuation = resolve_shift_for_punch(
+        db,
+        employee_id,
+        local_now,
+    )
     return calculate_attendance_status(check_in, shift)
 
 
