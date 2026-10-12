@@ -365,10 +365,14 @@ async def liveness_websocket(websocket: WebSocket, session_id: str):
             current_challenge = session.current_challenge
 
             if session.consecutive_count % 15 == 0:
-                logger.debug("challenge=%s blink=%s blink_count=%d mouth=%.3f consec=%d",
-                             current_challenge.value, metrics.blink_detected,
-                             metrics.blink_count, metrics.mouth_open_score,
-                             session.consecutive_count)
+                logger.debug(
+                    "challenge=%s blink=%s blink_count=%d mouth=%.3f "
+                    "yaw=%.3f blink_score=%.3f smile=%.3f consec=%d",
+                    current_challenge.value, metrics.blink_detected,
+                    metrics.blink_count, metrics.mouth_open_score,
+                    metrics.yaw_proxy, metrics.blink_score, metrics.smile_score,
+                    session.consecutive_count,
+                )
 
             # No face — don't terminate, just guide the user back into frame
             if not metrics.face_detected:
@@ -762,13 +766,16 @@ def legacy_recognize(body: LegacyRecognizeRequest):
     """Recognize one face against Backend-provided employee embeddings.
 
     The Backend owns employee identity data and supplies the candidate gallery.
-    A completed liveness session is required, but its JWT is never parsed here.
+    Bound sessions are identity-checked; fast mode requires passive validation.
     """
-    if body.fast_mode or not body.liveness_session_id:
+    if (
+        (not body.fast_mode and not body.liveness_session_id)
+        or (body.liveness_session_id and not _has_completed_liveness(body.liveness_session_id))
+    ):
         return _recognition_error(
             422,
             "LIVENESS_FAILED",
-            "A bound liveness verification session is required",
+            "A completed liveness verification session is required",
         )
 
     try:
@@ -789,6 +796,13 @@ def legacy_recognize(body: LegacyRecognizeRequest):
     if result.face_count > 1:
         return _recognition_error(422, "MULTIPLE_FACES", "Multiple faces detected", True)
 
+    if body.fast_mode:
+        passive_liveness = engine.process_frame(img_bytes)
+        if passive_liveness.is_spoof:
+            return _recognition_error(422, "LIVENESS_FAILED", "Passive liveness validation failed", False)
+        if passive_liveness.is_low_light:
+            return _recognition_error(422, "LOW_LIGHT", "Lighting is insufficient for fast attendance", False)
+
     query = np.asarray(result.embedding, dtype=np.float32)
     ranked_matches = _find_best_candidate(query, body.candidates)
     best_id, best_similarity = ranked_matches[0] if ranked_matches else (None, -1.0)
@@ -801,19 +815,24 @@ def legacy_recognize(body: LegacyRecognizeRequest):
                 "Multiple employees have similarly matching faces",
                 True,
             )
-        if not _verify_session_identity(body.liveness_session_id, best_id, query):
+        if (body.liveness_session_id
+                and not _verify_session_identity(body.liveness_session_id, best_id, query)):
             return _recognition_error(
                 422,
                 "SESSION_IDENTITY_MISMATCH",
                 "The face does not match the identity bound to the liveness session",
             )
+        verification_session = (
+            session_manager.get_session(body.liveness_session_id)
+            if body.liveness_session_id else None
+        )
         response = BackendRecognitionResponse(
             matched=True,
             employee_id=best_id,
             confidence=round(best_similarity, 4),
             liveness=True,
-            liveness_score=session_manager.get_session(body.liveness_session_id).liveness_score,
-            verification_status="VERIFIED",
+            liveness_score=verification_session.liveness_score if verification_session else 0.0,
+            verification_status="VERIFIED" if verification_session else "PASSIVE",
             session_id=body.liveness_session_id,
             success=True,
             recognized=True,

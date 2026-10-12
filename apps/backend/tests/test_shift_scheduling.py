@@ -136,6 +136,9 @@ def test_classifies_office_day_and_night_hours():
     assert classify_shift_kind(time(8, 0), time(17, 0)) is ShiftKind.DAY
     assert classify_shift_kind(time(16, 0), time(23, 0)) is ShiftKind.NIGHT
     assert classify_shift_kind(time(22, 0), time(6, 0), overnight=True) is ShiftKind.NIGHT
+
+
+def test_creates_morning_afternoon_and_night_shifts(db_session, shifts):
     morning, afternoon, night = shifts
 
     assert (morning.start_time, morning.end_time) == (time(8, 0), time(17, 0))

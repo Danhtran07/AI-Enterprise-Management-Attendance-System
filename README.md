@@ -264,6 +264,8 @@ npm run dev
 ```
 
 ### AI service
+To run the AI service manually, install its dependencies and start it from its
+backend directory:
 
 ```bash
 cd apps/ai-service/backend
@@ -283,6 +285,10 @@ The Docker setup exposes the AI service on port `8002` by default. If that port 
 ## Current Status
 
 The project includes AI-powered face recognition workflows and attendance logic across backend and AI service components. The repo is designed to support iterative development by multiple team members in parallel.
+
+## License
+
+This project is released under the project license included in the repository.
 
 - AI-01 → AI-07 are implemented on `feature/khoa-ai`.
 - AI-08 testing report: see [`apps/ai-service/AI_TEST_REPORT.md`](apps/ai-service/AI_TEST_REPORT.md).

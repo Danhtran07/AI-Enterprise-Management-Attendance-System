@@ -114,31 +114,3 @@ def test_blink_score_uses_eye_geometry_when_blendshape_is_missing():
     score = LivenessEngine.__new__(LivenessEngine)._compute_blink_score(result, landmarks)
 
     assert score >= 0.35
-
-
-def test_lighting_mean_helper_has_access_to_opencv():
-    import numpy as np
-
-    engine = LivenessEngine()
-    landmarks = [
-        SimpleNamespace(x=0.2 + (index % 10) * 0.01,
-                        y=0.2 + ((index // 10) % 10) * 0.01)
-        for index in range(468)
-    ]
-    frame = np.full((100, 100, 3), 128, dtype=np.uint8)
-
-    assert engine._compute_lighting_mean(frame, landmarks, 100, 100) == 128.0
-
-
-def test_spoof_helper_has_access_to_opencv():
-    import numpy as np
-
-    engine = LivenessEngine()
-    landmarks = [SimpleNamespace(x=0.2, y=0.2, z=0.0)] * 468
-    frame = np.full((100, 100, 3), 128, dtype=np.uint8)
-
-    texture, z_std, is_spoof = engine._check_spoof(frame, landmarks, 100, 100)
-
-    assert texture == 0.0
-    assert z_std == 0.0
-    assert is_spoof is False

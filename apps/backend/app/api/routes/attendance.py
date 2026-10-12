@@ -213,7 +213,7 @@ def get_attendance(
 def recognize_attendance(
     image: UploadFile = File(...),
     liveness_session_id: str | None = Form(default=None),
-    fast_mode: bool = Form(default=False),
+    fast_mode: bool = Form(default=True),
     db: Session = Depends(get_db),
     ai_client: AIRecognitionClient = Depends(_get_ai_client),
     current_user: User = Depends(get_current_user),

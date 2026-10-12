@@ -1,6 +1,6 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter, Navigate, Route, Routes, useParams } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import Attendance from "./pages/Attendance";
 import Dashboard from "./pages/Dashboard";
@@ -8,17 +8,13 @@ import Employees from "./pages/Employees";
 import Login from "./pages/Login";
 import Profile from "./pages/Profile";
 import Users from "./pages/Users";
+import EmployeeSchedule from "./pages/EmployeeSchedule";
 import Schedules from "./pages/Schedules";
 import App from "./pages/App";
 import Layout from "./components/Layout";
 import AdminRoute from "./components/AdminRoute";
 import ProtectedRoute from "./components/ProtectedRoute";
 import "./index.css";
-
-function EmployeeScheduleRedirect() {
-  const { employeeId } = useParams();
-  return <Navigate to={`/attendance?employee=${employeeId}`} replace />;
-}
 
 createRoot(
   document.getElementById("root")!
@@ -42,15 +38,8 @@ createRoot(
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/employees" element={<Employees />} />
             <Route path="/attendance" element={<Attendance />} />
-            <Route path="/my-schedule" element={<Navigate to="/attendance" replace />} />
-            <Route
-              path="/employees/:employeeId/schedule"
-              element={
-                <AdminRoute>
-                  <EmployeeScheduleRedirect />
-                </AdminRoute>
-              }
-            />
+            <Route path="/my-schedule" element={<EmployeeSchedule />} />
+            <Route path="/employees/:employeeId/schedule" element={<AdminRoute><EmployeeSchedule /></AdminRoute>} />
             <Route path="/profile" element={<Profile />} />
             <Route
               path="/shifts"
