@@ -6,11 +6,8 @@ from enum import Enum
 # ── Liveness ──────────────────────────────────────────────────────────────────
 
 class ChallengeType(str, Enum):
-    TURN_LEFT  = "TURN_LEFT"
-    TURN_RIGHT = "TURN_RIGHT"
     BLINK      = "BLINK"
-    SMILE      = "SMILE"
-    MOUTH_OPEN = "MOUTH_OPEN"
+    OPEN_MOUTH = "OPEN_MOUTH"
     COMPLETE   = "COMPLETE"
     FAILED     = "FAILED"
 
@@ -24,17 +21,13 @@ class SessionState(str, Enum):
 
 
 CHALLENGE_SEQUENCE = [
-    ChallengeType.TURN_LEFT,
-    ChallengeType.TURN_RIGHT,
-    ChallengeType.MOUTH_OPEN,
+    ChallengeType.BLINK,
+    ChallengeType.OPEN_MOUTH,
 ]
 
 CHALLENGE_INSTRUCTIONS = {
-    ChallengeType.TURN_LEFT:  "Slowly turn your head to the LEFT",
-    ChallengeType.TURN_RIGHT: "Now turn your head to the RIGHT",
-    ChallengeType.BLINK:      "Please blink slowly",
-    ChallengeType.SMILE:      "Now give us a big SMILE",
-    ChallengeType.MOUTH_OPEN: "Open your mouth slightly",
+    ChallengeType.BLINK:       "Please blink slowly",
+    ChallengeType.OPEN_MOUTH:  "Open your mouth slightly",
     ChallengeType.COMPLETE:   "Verification complete!",
     ChallengeType.FAILED:     "Verification failed. Please try again.",
 }
@@ -42,6 +35,15 @@ CHALLENGE_INSTRUCTIONS = {
 
 class FaceMetrics(BaseModel):
     face_detected: bool
+    blink_calibrated: bool = False
+    blink_detected: bool = False
+    blink_count: int = 0
+    blink_confidence: float = 0.0
+    mouth_open: bool = False
+    mouth_ratio: float = 0.0
+    mouth_confidence: float = 0.0
+    motion_detected: bool = False
+    movement_score: float = 0.0
     yaw_proxy: float = 0.0
     blink_score: float = 0.0
     smile_score: float = 0.0
@@ -73,6 +75,8 @@ class FrameResponse(BaseModel):
     challenge_passed: bool
     feedback: str
     metrics: FaceMetrics
+    is_live: bool = False
+    liveness_score: float = 0.0
     liveness_token: Optional[str] = None
 
 
@@ -80,6 +84,7 @@ class CreateSessionResponse(BaseModel):
     session_id: str
     expires_at: str
     challenges: list[str]
+    employee_id: Optional[int] = None
 
 
 class SessionStatusResponse(BaseModel):
@@ -167,6 +172,14 @@ class LegacyRecognizeCandidate(BaseModel):
     embedding: list[float]
 
 
+class CreateVerificationSessionRequest(BaseModel):
+    image: str
+    candidates: list[LegacyRecognizeCandidate] = Field(default_factory=list)
+    threshold: float = 0.5
+    min_margin: float = 0.05
+    identity_only: bool = False
+
+
 class LegacyRecognizeRequest(BaseModel):
     image: str
     candidates: list[LegacyRecognizeCandidate] = Field(default_factory=list)
@@ -181,6 +194,9 @@ class BackendRecognitionResponse(BaseModel):
     employee_id: Optional[int] = None
     confidence: float = 0.0
     liveness: bool
+    liveness_score: float = 0.0
+    verification_status: str = "UNVERIFIED"
+    session_id: Optional[str] = None
     # Kept for compatibility with the existing FaceAttend client contract.
     success: bool = True
     recognized: Optional[bool] = None

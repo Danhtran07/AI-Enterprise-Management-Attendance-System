@@ -33,10 +33,15 @@ class AttendanceResponse(AttendanceBase):
     early_leave_minutes: int
     working_minutes: int
     overtime_minutes: int
+    timestamp: datetime
+    face_similarity: float | None = None
+    liveness_score: float | None = None
+    verification_status: str
+    session_id: str | None = None
     created_at: datetime
     updated_at: datetime
 
-    @field_serializer("check_in", "check_out", "created_at", "updated_at")
+    @field_serializer("check_in", "check_out", "timestamp", "created_at", "updated_at")
     def serialize_datetime(self, value: datetime | None, _info):
         return to_vietnam_time(value)
 
@@ -52,6 +57,9 @@ class AttendanceRecognitionData(BaseModel):
     matched: bool
     confidence: float
     liveness: bool
+    liveness_score: float
+    verification_status: str
+    session_id: str | None = None
 
 
 class AttendanceRecognitionResponse(BaseModel):

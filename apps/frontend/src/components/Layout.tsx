@@ -69,10 +69,15 @@ const isUsersActive =
     "/users"
   );
 
-  const isShiftsActive = location.pathname.startsWith("/shifts");
-  const isSchedulesActive = location.pathname.startsWith("/schedules");
-  const isMyScheduleActive = location.pathname.includes("schedule");
-
+  const isShiftsActive =
+    location.pathname.startsWith("/shifts") ||
+    (location.pathname.startsWith("/schedules") &&
+      new URLSearchParams(location.search).get("tab") === "shifts");
+  const isSchedulesActive =
+    location.pathname.startsWith("/schedules") && !isShiftsActive;
+  const isMyScheduleActive =
+    location.pathname === "/my-schedule" ||
+    location.pathname.startsWith("/employees/") && location.pathname.endsWith("/schedule");
 
   function handleLogout() {
     localStorage.removeItem(
@@ -400,7 +405,7 @@ const isUsersActive =
   </span>
 
   <span>
-    {role === "ADMIN" ? "Attendance Calendar" : "My Attendance"}
+    {role === "ADMIN" ? "Attendance Calendar" : "My Calendar"}
   </span>
 </Link>
 {role === "ADMIN" && (<>

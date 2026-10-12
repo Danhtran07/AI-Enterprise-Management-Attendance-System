@@ -1,39 +1,22 @@
+import math
 import cv2
 import numpy as np
-import mediapipe as mp
-from mediapipe.tasks import python as mp_python
-from mediapipe.tasks.python import vision as mp_vision
+from collections.abc import Mapping
+from typing import Any, Protocol, TYPE_CHECKING
 from pathlib import Path
 
-from models import FaceMetrics
+if TYPE_CHECKING:
+    from models import FaceMetrics
+    from blink_detector import BlinkDetector
+    from liveness.motion_detector import MotionDetector
 
 # MediaPipe landmark indices
 NOSE_TIP = 1
-# Landmark 33  = person's LEFT eye outer corner
-# Landmark 263 = person's RIGHT eye outer corner
-# In camera.js the frame is mirrored (selfie view), so:
-#   - Person's LEFT eye (33)  appears on the LEFT  side of the image → lower x
-#   - Person's RIGHT eye (263) appears on the RIGHT side of the image → higher x
-# Therefore:
-#   - Person turns THEIR LEFT  → nose moves LEFT  in image → yaw_proxy NEGATIVE
-#   - Person turns THEIR RIGHT → nose moves RIGHT in image → yaw_proxy POSITIVE
 LEFT_EYE_OUTER = 33
 RIGHT_EYE_OUTER = 263
 LEFT_EYE_LANDMARKS = (33, 160, 158, 133, 153, 144)
 RIGHT_EYE_LANDMARKS = (362, 385, 387, 263, 373, 380)
 
-# Thresholds
-# yaw_proxy < -0.30  → person has turned LEFT
-# yaw_proxy >  0.30  → person has turned RIGHT
-TURN_LEFT_THRESHOLD  = -0.30   # yaw must be BELOW this for "turn left"
-TURN_RIGHT_THRESHOLD =  0.30   # yaw must be ABOVE this for "turn right"
-NEUTRAL_THRESHOLD    =  0.15   # within ±0.15 counts as "facing forward"
-
-# Smile blendshape threshold (0–1 score from MediaPipe)
-SMILE_SCORE_THRESHOLD = 0.5
-# Webcam frames often under-report MediaPipe eye closure scores. Keep this
-# above neutral noise while allowing a natural blink to pass reliably.
-BLINK_SCORE_THRESHOLD = 0.25
 MOUTH_OPEN_SCORE_THRESHOLD = 0.25
 
 UPPER_INNER_LIP = 13
@@ -46,29 +29,311 @@ SPOOF_Z_STD_MIN   = 0.008
 LOW_LIGHT_MEAN    = 25.0
 
 MODEL_PATH = Path(__file__).parent / "face_landmarker.task"
+LIVE_THRESHOLD = 0.85
+BLINK_WEIGHT = 0.40
+MOUTH_WEIGHT = 0.30
+MOTION_WEIGHT = 0.30
+
+
+class ChallengeManagerProtocol(Protocol):
+    """Small interface allowing the challenge policy to be injected."""
+
+    @property
+    def current_challenge(self) -> str: ...
+
+    @property
+    def complete(self) -> bool: ...
+
+    def observe(self, challenge: str, *, blink: bool, blink_count: int,
+                mouth_open: bool) -> bool: ...
+
+    def record_score(self, score: float) -> None: ...
+
+    @property
+    def checks(self) -> dict[str, bool]: ...
+
+    @property
+    def completed_scores(self) -> list[float]: ...
+
+
+class ChallengeManager:
+    """In-memory challenge sequence: blink, mouth open, then two blinks."""
+
+    SEQUENCE = ("BLINK", "OPEN_MOUTH")
+
+    def __init__(self) -> None:
+        self._index = 0
+        self._blink_total = 0
+        self._checks = {"blink": False, "mouth": False}
+        self._scores: list[float] = []
+
+    @property
+    def current_challenge(self) -> str:
+        return self.SEQUENCE[self._index] if not self.complete else "PASSED"
+
+    @property
+    def complete(self) -> bool:
+        return self._index >= len(self.SEQUENCE)
+
+    @property
+    def checks(self) -> dict[str, bool]:
+        return dict(self._checks)
+
+    @property
+    def completed_scores(self) -> list[float]:
+        return list(self._scores)
+
+    def observe(self, challenge: str, *, blink: bool, blink_count: int,
+                mouth_open: bool) -> bool:
+        """Record one detector update; return whether the active step passed."""
+        if self.complete or challenge != self.current_challenge:
+            return False
+
+        if challenge == "BLINK":
+            self._blink_total += max(1 if blink else 0, blink_count)
+            passed = self._blink_total >= 1
+            if passed:
+                self._checks["blink"] = True
+        else:
+            passed = mouth_open
+            if passed:
+                self._checks["mouth"] = True
+
+        if passed:
+            self._index += 1
+            self._blink_total = 0
+        return passed
+
+    def record_score(self, score: float) -> None:
+        self._scores.append(score)
 
 
 class LivenessEngine:
-    def __init__(self):
-        base_options = mp_python.BaseOptions(model_asset_path=str(MODEL_PATH))
-        options = mp_vision.FaceLandmarkerOptions(
-            base_options=base_options,
-            output_face_blendshapes=True,   # needed for smile score
-            num_faces=2,
-            min_face_detection_confidence=0.5,
-            min_face_presence_confidence=0.5,
-            min_tracking_confidence=0.5,
-        )
-        self.detector = mp_vision.FaceLandmarker.create_from_options(options)
+    def __init__(self, challenge_manager: ChallengeManagerProtocol | None = None,
+                 face_landmarker: Any | None = None):
+        # ``process`` is a pure detector-result aggregator. Keep the optional
+        # arguments for compatibility with existing composition roots, but do
+        # not initialize MediaPipe unless the legacy process_frame adapter is used.
+        self.challenge_manager = challenge_manager
+        self.detector = face_landmarker
+        self._session_detectors: dict[str, tuple[Any, Any, Any]] = {}
+        self._session_scores: dict[str, dict[str, Any]] = {}
+        self.reset()
 
-    def process_frame(self, jpeg_bytes: bytes) -> "FaceMetrics":
+    def reset(self) -> None:
+        """Clear accumulated liveness checks and detector confidences."""
+        self._checks = {"blink": False, "mouth": False, "motion": False}
+        self._confidence = {"blink": 0.0, "mouth": 0.0, "motion": 0.0}
+
+    def reset_session(self, session_id: str) -> None:
+        """Release per-session detectors and liveness state."""
+        detectors = self._session_detectors.pop(session_id, None)
+        if detectors:
+            for detector in detectors:
+                detector.reset()
+        self._session_scores.pop(session_id, None)
+
+    def get_session_result(self, session_id: str) -> dict[str, Any]:
+        """Return the current cumulative score/checks for a session."""
+        state = self._session_scores.get(session_id)
+        if state is None:
+            return {"is_live": False, "liveness_score": 0.0,
+                    "checks": {"blink": False, "mouth": False, "motion": False}}
+        checks = dict(state["checks"])
+        confidence = state["confidence"]
+        # Motion is supplemental anti-replay evidence, not an enrollment
+        # challenge. Keep reporting its check/score, but don't require it for
+        # liveness completion: the user is explicitly asked to blink and open
+        # their mouth only.
+        score = self._challenge_score(confidence)
+        required_checks_passed = checks["blink"] and checks["mouth"]
+        return {"is_live": bool(required_checks_passed and score >= LIVE_THRESHOLD),
+                "liveness_score": score, "checks": checks}
+
+    def evaluate_challenge(
+        self,
+        session_id: str,
+        challenge: Any,
+        metrics: Any,
+        consecutive_count: int,
+        blink_count_at_start: int = 0,
+        is_final_challenge: bool = False,
+    ) -> dict[str, Any]:
+        """Evaluate one challenge frame and maintain per-session liveness score."""
+        challenge_name = getattr(challenge, "value", challenge)
+        state = self._session_scores.setdefault(session_id, {
+            "checks": {"blink": False, "mouth": False, "motion": False},
+            "confidence": {"blink": 0.0, "mouth": 0.0, "motion": 0.0},
+        })
+        checks = state["checks"]
+        confidence = state["confidence"]
+        motion_detected = bool(self._value(metrics, "motion_detected", False))
+        if motion_detected:
+            checks["motion"] = True
+            confidence["motion"] = max(
+                confidence["motion"],
+                self._bounded_float(self._value(metrics, "movement_score", 0.0)),
+            )
+
+        if (not self._value(metrics, "face_detected", False)
+                or self._value(metrics, "is_spoof", False)
+                or self._value(metrics, "is_low_light", False)):
+            new_count = 0
+            passed = False
+        elif challenge_name == "BLINK":
+            passed = bool(self._value(metrics, "blink_detected", False))
+            new_count = 1 if passed else 0
+        elif challenge_name == "OPEN_MOUTH":
+            frame_passes = bool(self._value(metrics, "mouth_open", False))
+            new_count = consecutive_count + 1 if frame_passes else 0
+            passed = new_count >= 20
+            if frame_passes:
+                confidence["mouth"] = max(
+                    confidence["mouth"],
+                    self._bounded_float(self._value(metrics, "mouth_confidence", 0.0)),
+                )
+        else:
+            new_count, passed = 0, False
+
+        if passed and challenge_name == "BLINK":
+            checks["blink"] = True
+            confidence["blink"] = max(
+                confidence["blink"],
+                self._bounded_float(self._value(metrics, "blink_confidence", 0.0)),
+            )
+        if passed and challenge_name == "OPEN_MOUTH":
+            checks["mouth"] = True
+
+        score = self._challenge_score(confidence)
+        required_checks_passed = checks["blink"] and checks["mouth"]
+        return {
+            "challenge_passed": passed,
+            "consecutive_count": new_count,
+            "is_live": bool(is_final_challenge and passed and required_checks_passed
+                             and score >= LIVE_THRESHOLD),
+            "liveness_score": score,
+            "checks": dict(checks),
+        }
+
+    def process(self, blink_result: Any, mouth_result: Any,
+                motion_result: Any | None = None) -> dict[str, Any]:
+        """Aggregate detector results into a cumulative liveness assessment.
+
+        Detector inputs may be mappings or result objects. Positive checks and
+        their best valid confidence persist until ``reset``; this supports
+        asynchronous actions observed across multiple frames.
+        """
+        blink_detected = bool(self._value(
+            blink_result, "blink_detected", self._value(blink_result, "blink", False)
+        )) or self._bounded_int(self._value(blink_result, "blink_count", 0)) > 0
+        mouth_open = bool(self._value(mouth_result, "mouth_open", False))
+        motion_detected = bool(self._value(motion_result, "motion_detected", False))
+
+        observations = (
+            ("blink", blink_detected, self._value(blink_result, "confidence", 0.0)),
+            ("mouth", mouth_open, self._value(mouth_result, "confidence", 0.0)),
+            ("motion", motion_detected, self._value(motion_result, "movement_score", 0.0)),
+        )
+        for name, detected, confidence in observations:
+            if detected:
+                self._checks[name] = True
+                self._confidence[name] = max(
+                    self._confidence[name], self._bounded_float(confidence)
+                )
+
+        score = self._challenge_score(self._confidence)
+        checks = dict(self._checks)
+        return {
+            "is_live": bool(checks["blink"] and checks["mouth"] and score >= LIVE_THRESHOLD),
+            "liveness_score": score,
+            "checks": checks,
+        }
+
+    @staticmethod
+    def _challenge_score(confidence: Mapping[str, float]) -> float:
+        """Score only instructed blink/mouth checks; motion remains auxiliary."""
+        required_weight = BLINK_WEIGHT + MOUTH_WEIGHT
+        score = (
+            BLINK_WEIGHT * confidence["blink"]
+            + MOUTH_WEIGHT * confidence["mouth"]
+        ) / required_weight
+        return round(score, 4)
+
+    @staticmethod
+    def _value(result: Any, key: str, default: Any) -> Any:
+        if isinstance(result, Mapping):
+            return result.get(key, default)
+        return getattr(result, key, default) if result is not None else default
+
+    @staticmethod
+    def _bounded_float(value: Any) -> float:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        if not math.isfinite(number):
+            return 0.0
+        return max(0.0, min(1.0, number))
+
+    @staticmethod
+    def _bounded_int(value: Any) -> int:
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return 0
+
+    def process_frame(self, jpeg_bytes: bytes,
+                      motion_detector: "MotionDetector | None" = None,
+                      blink_detector: "BlinkDetector | None" = None,
+                      mouth_detector: Any | None = None,
+                      session_id: str | None = None) -> "FaceMetrics":
         """
         Process one JPEG frame. Returns a fully populated FaceMetrics including
         forehead_rgb and forehead_bbox_norm when a face is detected.
         """
+        import mediapipe as mp
+        import numpy as np
+        from models import FaceMetrics
+
+        if session_id is not None and (
+            motion_detector is None or blink_detector is None or mouth_detector is None
+        ):
+            if session_id not in self._session_detectors:
+                from blink_detector import BlinkDetector
+                from liveness.motion_detector import MotionDetector
+                from mouth_detector import MouthDetector
+                self._session_detectors[session_id] = (
+                    MotionDetector(), BlinkDetector(), MouthDetector()
+                )
+            owned_motion, owned_blink, owned_mouth = self._session_detectors[session_id]
+            motion_detector = motion_detector or owned_motion
+            blink_detector = blink_detector or owned_blink
+            mouth_detector = mouth_detector or owned_mouth
+
+        if self.detector is None:
+            from mediapipe.tasks import python as mp_python
+            from mediapipe.tasks.python import vision as mp_vision
+
+            base_options = mp_python.BaseOptions(model_asset_path=str(MODEL_PATH))
+            options = mp_vision.FaceLandmarkerOptions(
+                base_options=base_options,
+                output_face_blendshapes=True,
+                num_faces=2,
+                min_face_detection_confidence=0.5,
+                min_face_presence_confidence=0.5,
+                min_tracking_confidence=0.5,
+            )
+            self.detector = mp_vision.FaceLandmarker.create_from_options(options)
+
         nparr = np.frombuffer(jpeg_bytes, np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         if frame is None:
+            if motion_detector is not None:
+                motion_detector.update(None)
+            if blink_detector is not None:
+                blink_detector.update(None)
+            if mouth_detector is not None:
+                mouth_detector.update(None)
             return FaceMetrics(face_detected=False)
 
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -76,18 +341,39 @@ class LivenessEngine:
         result = self.detector.detect(mp_image)
 
         if not result.face_landmarks:
+            if motion_detector is not None:
+                motion_detector.update(None)
+            if blink_detector is not None:
+                blink_detector.update(None)
+            if mouth_detector is not None:
+                mouth_detector.update(None)
             return FaceMetrics(face_detected=False)
 
         if len(result.face_landmarks) > 1:
+            if motion_detector is not None:
+                motion_detector.update(None)
+            if blink_detector is not None:
+                blink_detector.update(None)
+            if mouth_detector is not None:
+                mouth_detector.update(None)
             return FaceMetrics(face_detected=False)
 
         landmarks = result.face_landmarks[0]
         h, w = frame.shape[:2]
+        motion = motion_detector.update(landmarks) if motion_detector is not None else None
+        blink = (
+            blink_detector.update(landmarks, image_size=(w, h))
+            if blink_detector is not None else None
+        )
+        mouth = mouth_detector.update(landmarks) if mouth_detector is not None else None
 
         yaw_proxy   = self._compute_yaw_proxy(landmarks)
         blink_score = self._compute_blink_score(result, landmarks)
         smile_score = self._compute_smile_score(result)
-        mouth_open_score = self._compute_mouth_open_score(result, landmarks)
+        mouth_open_score = (
+            float(mouth.confidence) if mouth is not None
+            else self._compute_mouth_open_score(result, landmarks)
+        )
         lighting_mean = self._compute_lighting_mean(frame, landmarks, w, h)
         texture_var, z_std, is_spoof = self._check_spoof(frame, landmarks, w, h)
         forehead    = self.extract_forehead_rgb(frame, landmarks, w, h)
@@ -95,6 +381,15 @@ class LivenessEngine:
         bs = self.extract_blendshapes(result)
         metrics = FaceMetrics(
             face_detected=True,
+            blink_calibrated=bool(blink and blink.calibrated),
+            blink_detected=bool(blink and blink.blink),
+            blink_count=int(blink.count) if blink else 0,
+            blink_confidence=float(blink.blink_confidence) if blink and blink.blink else 0.0,
+            mouth_open=bool(mouth.mouth_open) if mouth else False,
+            mouth_ratio=float(mouth.mouth_ratio) if mouth else 0.0,
+            mouth_confidence=float(mouth.confidence) if mouth else mouth_open_score,
+            motion_detected=bool(motion and motion["motion_detected"]),
+            movement_score=float(motion["movement_score"]) if motion else 0.0,
             yaw_proxy=round(yaw_proxy, 4),
             blink_score=round(blink_score, 4),
             smile_score=round(smile_score, 4),
@@ -117,10 +412,8 @@ class LivenessEngine:
 
     def _compute_yaw_proxy(self, landmarks) -> float:
         """
-        Symmetric ratio of nose-to-eye distances.
-        ~0   = facing forward
-        < 0  = person turned LEFT  (nose moves toward lower x in mirrored frame)
-        > 0  = person turned RIGHT (nose moves toward higher x in mirrored frame)
+        Symmetric ratio of nose-to-eye distances, retained only as an rPPG
+        frame-stability signal. It is not used to select or pass challenges.
         """
         nose      = landmarks[NOSE_TIP]
         left_eye  = landmarks[LEFT_EYE_OUTER]
@@ -317,4 +610,5 @@ class LivenessEngine:
         return r_mean, g_mean, b_mean, x1 / w, y1 / h, x2 / w, y2 / h
 
     def close(self):
-        self.detector.close()
+        if self.detector is not None:
+            self.detector.close()

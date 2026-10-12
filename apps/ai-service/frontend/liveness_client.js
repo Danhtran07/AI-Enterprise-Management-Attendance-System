@@ -9,8 +9,8 @@ const faceOval     = document.getElementById("face-oval");
 const progressBar  = document.getElementById("progress-bar");
 const tokenBox     = document.getElementById("token-box");
 
-const STEPS = [0, 1];
-const TOTAL_CHALLENGES = 2;
+const STEPS = [0, 1, 2];
+const TOTAL_CHALLENGES = 3;
 
 let ws = null;
 

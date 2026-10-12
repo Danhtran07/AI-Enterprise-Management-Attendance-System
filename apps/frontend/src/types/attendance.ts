@@ -10,6 +10,11 @@ export interface Attendance {
   check_in: string | null;
   check_out: string | null;
   status: AttendanceStatus;
+  timestamp: string;
+  face_similarity: number | null;
+  liveness_score: number | null;
+  verification_status: string;
+  session_id: string | null;
   created_at: string;
   updated_at: string;
 }

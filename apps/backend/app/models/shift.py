@@ -65,6 +65,12 @@ class Shift(Base):
         default=30,
     )
 
+    checkin_close_minutes: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=90,
+    )
+
     is_overnight: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,

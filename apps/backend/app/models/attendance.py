@@ -7,6 +7,8 @@ from sqlalchemy import (
     Enum as SQLEnum,
     ForeignKey,
     Integer,
+    Float,
+    String,
     UniqueConstraint,
     func,
 )
@@ -114,6 +116,20 @@ class Attendance(Base):
         onupdate=func.now(),
         nullable=False,
     )
+
+    # Latest attendance verification event (check-in or check-out).
+    timestamp: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    face_similarity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    liveness_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    verification_status: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="UNVERIFIED", server_default="UNVERIFIED"
+    )
+    session_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
     employee: Mapped["Employee"] = relationship(
         "Employee",

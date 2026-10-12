@@ -1,6 +1,8 @@
 import uuid
 import hashlib
 import time
+import numpy as np
+from threading import Lock
 from datetime import datetime, timezone, timedelta
 from models import ChallengeType, SessionState, CHALLENGE_SEQUENCE
 
@@ -17,12 +19,89 @@ class Session:
         self.consecutive_count = 0
         self.challenges_completed = 0
         self.liveness_token: str | None = None
+        self.employee_id: int | None = None
+        self.face_embedding_reference: np.ndarray | None = None
+        self.liveness_status = False
+        self.liveness_score = 0.0
+        self.verification_status = "UNBOUND"
+        self.liveness_passed_at: datetime | None = None
+        self.verification_consumed = False
+        self._identity_lock = Lock()
+        self.identity_challenge_indices: set[int] = set()
         self.smile_photo_path: str | None = None
-        self.waiting_for_neutral: bool = False  # must return to forward-facing before next challenge
+        self.blink_count_at_challenge_start: int = 0
         self.awaiting_rppg: bool = False
         self.spoof_consecutive_count = 0
         self.created_at = time.monotonic()
+        self.created_at_utc = datetime.now(timezone.utc)
         self.frame_hashes: list[str] = []
+
+    def bind_identity(self, employee_id: int, embedding: np.ndarray) -> None:
+        """Bind the short-lived session to an identity and in-memory embedding."""
+        self.bind_face_reference(embedding)
+        self.employee_id = int(employee_id)
+
+    def bind_face_reference(self, embedding: np.ndarray) -> None:
+        """Keep an in-memory face reference for liveness frames (no employee required)."""
+        vector = np.asarray(embedding, dtype=np.float32).reshape(-1).copy()
+        if vector.size == 0 or not np.isfinite(vector).all():
+            raise ValueError("A finite face embedding is required")
+        self.face_embedding_reference = vector
+        self.verification_status = "PENDING"
+
+    def consume_identity_verification(
+        self,
+        employee_id: int,
+        embedding: np.ndarray,
+        min_similarity: float,
+    ) -> bool:
+        """Match and consume this completed liveness session exactly once."""
+        with self._identity_lock:
+            return self._consume_identity_verification(employee_id, embedding, min_similarity)
+
+    def confirm_challenge_identity(
+        self, challenge_index: int, embedding: np.ndarray, min_similarity: float
+    ) -> bool:
+        """Confirm that a liveness action was performed by the bound identity."""
+        with self._identity_lock:
+            if self.face_embedding_reference is None:
+                return False
+            if self._embedding_similarity(embedding) < min_similarity:
+                return False
+            self.identity_challenge_indices.add(challenge_index)
+            return True
+
+    def has_confirmed_all_challenges(self, challenge_count: int) -> bool:
+        return self.identity_challenge_indices.issuperset(range(challenge_count))
+
+    def _consume_identity_verification(
+        self, employee_id: int, embedding: np.ndarray, min_similarity: float
+    ) -> bool:
+        if (
+            self.state != SessionState.COMPLETE
+            or not self.liveness_status
+            or self.verification_consumed
+            or self.employee_id != employee_id
+            or self.face_embedding_reference is None
+        ):
+            return False
+        similarity = self._embedding_similarity(embedding)
+        if not np.isfinite(similarity) or similarity < min_similarity:
+            return False
+        self.verification_consumed = True
+        self.verification_status = "VERIFIED"
+        return True
+
+    def _embedding_similarity(self, embedding: np.ndarray) -> float:
+        query = np.asarray(embedding, dtype=np.float32).reshape(-1)
+        reference = self.face_embedding_reference
+        if reference is None or query.shape != reference.shape or not np.isfinite(query).all():
+            return -1.0
+        query_norm = float(np.linalg.norm(query))
+        reference_norm = float(np.linalg.norm(reference))
+        if query_norm <= 0 or reference_norm <= 0:
+            return -1.0
+        return float(np.dot(query / query_norm, reference / reference_norm))
 
     @property
     def current_challenge(self) -> ChallengeType:
@@ -39,17 +118,11 @@ class Session:
         expiry = datetime.now(timezone.utc) + timedelta(seconds=SESSION_TTL_SECONDS)
         return expiry.isoformat()
 
-    def advance_challenge(self):
+    def advance_challenge(self, blink_count: int = 0):
         self.challenge_index += 1
         self.challenges_completed += 1
         self.consecutive_count = 0
-        # For head-turn challenges, require returning to neutral before next one
-        from models import CHALLENGE_SEQUENCE, ChallengeType
-        next_is_head_turn = (
-            self.challenge_index < len(CHALLENGE_SEQUENCE) and
-            CHALLENGE_SEQUENCE[self.challenge_index] in (ChallengeType.TURN_LEFT, ChallengeType.TURN_RIGHT)
-        )
-        self.waiting_for_neutral = next_is_head_turn
+        self.blink_count_at_challenge_start = max(0, blink_count)
 
     def is_replay_frame(self, frame_bytes: bytes) -> bool:
         frame_hash = hashlib.sha256(frame_bytes).hexdigest()
@@ -73,7 +146,7 @@ class SessionManager:
 
     def get_session(self, session_id: str) -> Session | None:
         session = self._sessions.get(session_id)
-        if session and session.is_expired and session.state == SessionState.IN_PROGRESS:
+        if session and session.is_expired and session.state != SessionState.EXPIRED:
             session.state = SessionState.EXPIRED
         return session
 
@@ -86,7 +159,7 @@ class SessionManager:
     def cleanup_expired(self):
         expired = [
             sid for sid, s in self._sessions.items()
-            if s.is_expired and s.state not in (SessionState.COMPLETE,)
+            if s.is_expired
         ]
         for sid in expired:
             del self._sessions[sid]
