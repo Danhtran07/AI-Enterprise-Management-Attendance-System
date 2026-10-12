@@ -23,10 +23,6 @@ def evaluate_challenge(
     if challenge == ChallengeType.BLINK:
         return metrics.blink_detected, 1 if metrics.blink_detected else 0
 
-    if challenge == ChallengeType.BLINK_TWICE:
-        completed_blinks = max(0, metrics.blink_count - blink_count_at_challenge_start)
-        return completed_blinks >= 2, completed_blinks
-
     frame_passes = _frame_passes_challenge(challenge, metrics)
     new_count = consecutive_count + 1 if frame_passes else 0
     challenge_passed = new_count >= CONSECUTIVE_FRAMES_REQUIRED

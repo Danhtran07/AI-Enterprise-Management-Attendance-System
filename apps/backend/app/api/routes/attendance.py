@@ -292,6 +292,7 @@ def recognize_attendance(
 @router.post("/liveness/session")
 def create_liveness_session(
     image: UploadFile | None = File(default=None),
+    identity_only: bool = Form(default=False),
     db: Session = Depends(get_db),
     ai_client: AIRecognitionClient = Depends(_get_ai_client),
     current_user: User = Depends(get_current_user),
@@ -315,7 +316,9 @@ def create_liveness_session(
     try:
         if initial_face_image is None:
             return ai_client.create_liveness_session()
-        return ai_client.create_liveness_session(initial_face_image, candidates)
+        return ai_client.create_liveness_session(
+            initial_face_image, candidates, identity_only=identity_only
+        )
     except AIServiceTimeoutError as exc:
         raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=str(exc)) from exc
     except AIServiceUnavailableError as exc:

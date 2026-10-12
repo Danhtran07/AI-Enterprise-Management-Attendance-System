@@ -5,10 +5,12 @@ import type {
 } from "../types/recognition";
 
 export async function createLivenessSession(
-  initialFace?: Blob
+  initialFace?: Blob,
+  identityOnly = false,
 ): Promise<LivenessSessionResponse> {
   const formData = new FormData();
   if (initialFace) formData.append("image", initialFace, "verification-start.jpg");
+  if (identityOnly) formData.append("identity_only", "true");
   const response = await apiClient.post<LivenessSessionResponse>(
     "/api/attendance/liveness/session",
     initialFace ? formData : undefined,

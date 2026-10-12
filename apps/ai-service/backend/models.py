@@ -8,7 +8,6 @@ from enum import Enum
 class ChallengeType(str, Enum):
     BLINK      = "BLINK"
     OPEN_MOUTH = "OPEN_MOUTH"
-    BLINK_TWICE = "BLINK_TWICE"
     COMPLETE   = "COMPLETE"
     FAILED     = "FAILED"
 
@@ -24,13 +23,11 @@ class SessionState(str, Enum):
 CHALLENGE_SEQUENCE = [
     ChallengeType.BLINK,
     ChallengeType.OPEN_MOUTH,
-    ChallengeType.BLINK_TWICE,
 ]
 
 CHALLENGE_INSTRUCTIONS = {
     ChallengeType.BLINK:       "Please blink slowly",
     ChallengeType.OPEN_MOUTH:  "Open your mouth slightly",
-    ChallengeType.BLINK_TWICE: "Please blink twice",
     ChallengeType.COMPLETE:   "Verification complete!",
     ChallengeType.FAILED:     "Verification failed. Please try again.",
 }
@@ -38,6 +35,7 @@ CHALLENGE_INSTRUCTIONS = {
 
 class FaceMetrics(BaseModel):
     face_detected: bool
+    blink_calibrated: bool = False
     blink_detected: bool = False
     blink_count: int = 0
     blink_confidence: float = 0.0
@@ -179,6 +177,7 @@ class CreateVerificationSessionRequest(BaseModel):
     candidates: list[LegacyRecognizeCandidate] = Field(default_factory=list)
     threshold: float = 0.5
     min_margin: float = 0.05
+    identity_only: bool = False
 
 
 class LegacyRecognizeRequest(BaseModel):

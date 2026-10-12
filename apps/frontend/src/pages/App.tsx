@@ -11,6 +11,7 @@ import ErrorState from "../components/ErrorState";
 import LoadingState from "../components/LoadingState";
 import { getApiErrorMessage } from "../api/error";
 import { drawMirroredVideoFrame } from "../utils/cameraMirror";
+import { challengeFeedback, challengeLabel, LIVENESS_STEPS } from "../utils/livenessFeedback";
 import {
   createLivenessSession,
   recognizeAttendance,
@@ -29,17 +30,6 @@ const LIVENESS_SESSION_KEY = "liveness_session_id";
 const FAST_ATTENDANCE = false;
 const FACE_LANDMARKER_MODEL =
   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
-const LIVENESS_STEPS = [
-  { challenge: "BLINK", label: "Chớp mắt" },
-  { challenge: "OPEN_MOUTH", label: "Mở miệng" },
-  { challenge: "BLINK_TWICE", label: "Chớp mắt 2 lần" },
-] as const;
-
-function challengeLabel(challenge: string) {
-  return LIVENESS_STEPS.find((step) => step.challenge === challenge)?.label
-    || (challenge === "COMPLETE" ? "Đã xác minh" : "Đang kiểm tra khuôn mặt");
-}
-
 function formatTime(value: string | null) {
   if (!value) return "-";
   return new Date(value).toLocaleTimeString("vi-VN", {
@@ -278,10 +268,10 @@ export default function App() {
         if (typeof message.challenge_index === "number") {
           setChallengeIndex(message.challenge_index);
         }
-        setFeedback(message.feedback || "Keep your face inside the frame...");
+        setFeedback(challengeFeedback(message.challenge || "", message.feedback));
         if (message.challenge === "COMPLETE") {
           setLivenessComplete(true);
-          setFeedback("Liveness verified. Capture your face to continue.");
+          setFeedback(challengeFeedback("COMPLETE", message.feedback));
           stopLiveness();
         } else if (message.challenge === "FAILED") {
           setError(message.feedback || "Liveness verification failed.");

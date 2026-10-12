@@ -1,8 +1,8 @@
 <div align="center">
 
-# FaceAttend AI
+# Averis
 
-### AI-Powered Attendance Management System
+### AI-Powered Enterprise Attendance Management System
 
 <p>
   <b>Facial Recognition</b> •
@@ -24,7 +24,7 @@
   <b>facial recognition and AI-based verification</b>
   to automate employee check-in and check-out.
   <br>
-  <b>This project is built for learning, demo, and portfolio purposes.</b>
+  <b>Built for secure, automated, and intelligent workforce management.</b>
 </p>
 
 </div>
@@ -33,11 +33,11 @@
 
 ## Overview
 
-FaceAttend AI is a learning-focused demo project for building an intelligent attendance management system
+**Averis** is an intelligent AI-powered attendance management system
 that combines **facial recognition, employee verification,
 attendance tracking, and AI processing**.
 
-This repository is intended to showcase how a full-stack AI application can be structured using a React frontend, FastAPI backend, PostgreSQL database, and a dedicated AI recognition service.
+This repository showcases how a full-stack AI application can be structured using a React frontend, FastAPI backend, PostgreSQL database, and a dedicated AI recognition service.
 
 ### Core Features
 
@@ -284,29 +284,8 @@ The Docker setup exposes the AI service on port `8002` by default. If that port 
 
 The project includes AI-powered face recognition workflows and attendance logic across backend and AI service components. The repo is designed to support iterative development by multiple team members in parallel.
 
-## License
-
-This project is released under the project license included in the repository.
-npm run dev
-```
-
-To run the AI service manually, install its dependencies and start it from its
-backend directory:
-
-```bash
-cd apps/ai-service/backend
-pip install -r ../requirements.txt
-uvicorn main:app --reload --port 8001
-```
-
-The Docker setup publishes the AI service on host port `8002` by default. Set
-`AI_SERVICE_HOST_PORT` in `.env` if that port is already in use.
-
-## Current Status
-
-AI-01 → AI-07 are implemented on `feature/khoa-ai`.
-
-AI-08 testing report: see [`ai-service/AI_TEST_REPORT.md`](ai-service/AI_TEST_REPORT.md).
+- AI-01 → AI-07 are implemented on `feature/khoa-ai`.
+- AI-08 testing report: see [`apps/ai-service/AI_TEST_REPORT.md`](apps/ai-service/AI_TEST_REPORT.md).
 
 AI-01 Face Detection is implemented in `ai-service`.
 
@@ -517,3 +496,7 @@ Responses never include stack traces, raw images, full embeddings, secrets, JWT,
 
 The backend integration includes authentication, users, employees, attendance,
 database migrations, and health endpoints.
+
+## License
+
+This project is released under the project license included in the repository.

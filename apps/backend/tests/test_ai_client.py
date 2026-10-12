@@ -106,6 +106,7 @@ def test_identity_bound_liveness_session_sends_initial_frame_and_gallery():
         assert request.url.path == "/session/create"
         assert body["image"] == "c3RhcnQtZnJhbWU="
         assert body["candidates"] == [{"employee_id": 7, "embedding": [0.1, 0.2]}]
+        assert body["identity_only"] is True
         return httpx.Response(
             200,
             json={"session_id": "session-x", "expires_at": "later",
@@ -116,6 +117,7 @@ def test_identity_bound_liveness_session_sends_initial_frame_and_gallery():
     session = client.create_liveness_session(
         b"start-frame",
         [AIRecognitionCandidate(employee_id=7, embedding=[0.1, 0.2])],
+        identity_only=True,
     )
     assert session.session_id == "session-x"
     assert session.employee_id == 7

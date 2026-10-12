@@ -38,10 +38,14 @@ class Session:
 
     def bind_identity(self, employee_id: int, embedding: np.ndarray) -> None:
         """Bind the short-lived session to an identity and in-memory embedding."""
+        self.bind_face_reference(embedding)
+        self.employee_id = int(employee_id)
+
+    def bind_face_reference(self, embedding: np.ndarray) -> None:
+        """Keep an in-memory face reference for liveness frames (no employee required)."""
         vector = np.asarray(embedding, dtype=np.float32).reshape(-1).copy()
         if vector.size == 0 or not np.isfinite(vector).all():
             raise ValueError("A finite face embedding is required")
-        self.employee_id = int(employee_id)
         self.face_embedding_reference = vector
         self.verification_status = "PENDING"
 
@@ -60,7 +64,7 @@ class Session:
     ) -> bool:
         """Confirm that a liveness action was performed by the bound identity."""
         with self._identity_lock:
-            if self.employee_id is None or self.face_embedding_reference is None:
+            if self.face_embedding_reference is None:
                 return False
             if self._embedding_similarity(embedding) < min_similarity:
                 return False

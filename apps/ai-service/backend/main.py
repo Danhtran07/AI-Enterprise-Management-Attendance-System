@@ -191,19 +191,22 @@ def create_session(body: CreateVerificationSessionRequest | None = Body(default=
             raise HTTPException(status_code=422, detail="A valid face is required to start verification")
         if result.face_count > 1:
             raise HTTPException(status_code=422, detail="Multiple faces detected")
-        ranked = _find_best_candidate(
-            np.asarray(result.embedding, dtype=np.float32), body.candidates
-        )
-        employee_id, similarity = ranked[0] if ranked else (None, -1.0)
-        if employee_id is None or similarity < body.threshold:
-            raise HTTPException(status_code=422, detail="Face was not recognized")
-        if _is_ambiguous_match(ranked, body.min_margin):
-            raise HTTPException(status_code=422, detail="Face match is ambiguous")
         embedding = result.embedding
+        if not body.identity_only:
+            ranked = _find_best_candidate(
+                np.asarray(result.embedding, dtype=np.float32), body.candidates
+            )
+            employee_id, similarity = ranked[0] if ranked else (None, -1.0)
+            if employee_id is None or similarity < body.threshold:
+                raise HTTPException(status_code=422, detail="Face was not recognized")
+            if _is_ambiguous_match(ranked, body.min_margin):
+                raise HTTPException(status_code=422, detail="Face match is ambiguous")
 
     session = session_manager.create_session()
     if employee_id is not None and embedding is not None:
         session.bind_identity(employee_id, embedding)
+    elif body is not None and body.identity_only and embedding is not None:
+        session.bind_face_reference(embedding)
     return CreateSessionResponse(
         session_id=session.session_id,
         expires_at=session.expires_at_iso,
@@ -388,6 +391,19 @@ async def liveness_websocket(websocket: WebSocket, session_id: str):
                                      metrics)
                 break
 
+            # BlinkDetector needs an open-eye baseline before it can reliably
+            # emit a blink event. Do not ask for a blink (and silently ignore
+            # the user's action) while those calibration frames are collected.
+            if (current_challenge == ChallengeType.BLINK
+                    and not metrics.blink_calibrated):
+                await _send_response(
+                    websocket, session_id, current_challenge,
+                    session.challenge_index, False,
+                    "Keep your eyes open while we calibrate, then blink slowly.",
+                    metrics,
+                )
+                continue
+
             # Evaluate current challenge
             liveness_result = engine.evaluate_challenge(
                 session_id,
@@ -404,8 +420,7 @@ async def liveness_websocket(websocket: WebSocket, session_id: str):
             # Bind every completed action (and both mouth-hold endpoints) to
             # the identity captured when this verification session was created.
             identity_sample_required = (
-                (current_challenge in (ChallengeType.BLINK, ChallengeType.BLINK_TWICE)
-                 and metrics.blink_detected)
+                (current_challenge == ChallengeType.BLINK and metrics.blink_detected)
                 or (current_challenge == ChallengeType.OPEN_MOUTH
                     and (new_count == 1 or challenge_passed))
             )
@@ -466,7 +481,7 @@ async def liveness_websocket(websocket: WebSocket, session_id: str):
                     next_challenge = session.current_challenge
                     await _send_response(
                         websocket, session_id, next_challenge,
-                        session.challenge_index, False,
+                        session.challenge_index, True,
                         CHALLENGE_INSTRUCTIONS[next_challenge],
                         metrics, liveness_result=liveness_result,
                     )
@@ -537,6 +552,8 @@ def _progress_feedback(challenge: ChallengeType, metrics: FaceMetrics, consecuti
     base = CHALLENGE_INSTRUCTIONS[challenge]
     if not metrics.face_detected:
         return "No face detected. Please look at the camera."
+    if challenge == ChallengeType.OPEN_MOUTH:
+        return f"{base} (hold: {consecutive}/20)"
     if consecutive > 0:
         return f"{base} (hold it...)"
     return base

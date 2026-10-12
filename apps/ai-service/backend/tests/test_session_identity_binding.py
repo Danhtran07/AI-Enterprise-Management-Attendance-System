@@ -52,7 +52,17 @@ def test_liveness_action_frames_must_match_bound_identity():
     session = completed_bound_session()
     assert session.confirm_challenge_identity(0, np.asarray([0.99, 0.01, 0.0]), 0.60)
     assert not session.confirm_challenge_identity(1, np.asarray([0.0, 1.0, 0.0]), 0.60)
-    assert not session.has_confirmed_all_challenges(3)
+    assert not session.has_confirmed_all_challenges(2)
     assert session.confirm_challenge_identity(1, np.asarray([0.99, 0.01, 0.0]), 0.60)
-    assert session.confirm_challenge_identity(2, np.asarray([0.99, 0.01, 0.0]), 0.60)
-    assert session.has_confirmed_all_challenges(3)
+    assert session.has_confirmed_all_challenges(2)
+
+
+def test_enrollment_session_can_bind_an_anonymous_face_reference():
+    session = Session("enrollment-session")
+    session.bind_face_reference(np.asarray([1.0, 0.0, 0.0], dtype=np.float32))
+
+    assert session.employee_id is None
+    assert session.confirm_challenge_identity(0, np.asarray([0.99, 0.01, 0.0]), 0.60)
+    assert session.confirm_challenge_identity(1, np.asarray([0.99, 0.01, 0.0]), 0.60)
+    assert session.has_confirmed_all_challenges(2)
+    assert not session.confirm_challenge_identity(1, np.asarray([0.0, 1.0, 0.0]), 0.60)

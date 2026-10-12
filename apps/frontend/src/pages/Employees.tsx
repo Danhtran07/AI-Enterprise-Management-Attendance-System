@@ -28,6 +28,7 @@ import {
   evaluateFaceCaptureQuality,
 } from "../utils/faceQuality";
 import { drawMirroredVideoFrame } from "../utils/cameraMirror";
+import { challengeFeedback, LIVENESS_STEPS } from "../utils/livenessFeedback";
 
 import type {
   Employee,
@@ -665,7 +666,24 @@ export default function Employees() {
 
   async function startEnrollmentLiveness() {
     try {
-      const session = await createLivenessSession();
+      const video = cameraVideoRef.current;
+      const canvas = cameraCanvasRef.current;
+      if (!video || !canvas || video.videoWidth === 0 || video.videoHeight === 0) {
+        throw new Error("Camera is not ready for liveness verification.");
+      }
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("Unable to capture the initial face frame.");
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const initialFace = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob(
+          (blob) => blob ? resolve(blob) : reject(new Error("Unable to encode the initial face frame.")),
+          "image/jpeg",
+          0.9,
+        );
+      });
+      const session = await createLivenessSession(initialFace, true);
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const token = localStorage.getItem("access_token");
       const socket = new WebSocket(
@@ -695,6 +713,7 @@ export default function Employees() {
         const message = JSON.parse(event.data) as {
           challenge?: string;
           challenge_index?: number;
+          challenge_passed?: boolean;
           feedback?: string;
           error?: string;
         };
@@ -702,13 +721,25 @@ export default function Employees() {
           setCameraError(message.error);
           return;
         }
+        if (message.challenge === "FAILED") {
+          setCameraError(message.feedback || "Xác minh khuôn mặt thất bại. Vui lòng thử lại.");
+          setEnrollmentFeedback(message.feedback || "Xác minh thất bại.");
+          stopCameraStream();
+          return;
+        }
         setEnrollmentChallenge(message.challenge || "WAITING");
         setEnrollmentChallengeIndex(message.challenge_index ?? -1);
-        setEnrollmentFeedback(message.feedback || "Follow the instruction on screen...");
+        const activeChallenge = message.challenge || "";
+        const instruction = challengeFeedback(activeChallenge, message.feedback);
+        setEnrollmentFeedback(
+          message.challenge_passed && activeChallenge === "OPEN_MOUTH"
+            ? `Đã nhận diện chớp mắt. ${instruction}`
+            : instruction,
+        );
         if (message.challenge === "COMPLETE") {
           livenessCompleteRef.current = true;
           setLivenessComplete(true);
-          setEnrollmentFeedback("Liveness verified. Hold still while we scan 3 samples...");
+          setEnrollmentFeedback("Xác minh thành công. Giữ yên để quét 3 mẫu khuôn mặt...");
           if (livenessTimerRef.current !== null) {
             window.clearInterval(livenessTimerRef.current);
             livenessTimerRef.current = null;
@@ -1053,22 +1084,18 @@ export default function Employees() {
               </div>
 
               <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide">
-                {([
-                  ["BLINK", "Chớp mắt", 0],
-                  ["OPEN_MOUTH", "Mở miệng", 1],
-                  ["BLINK_TWICE", "Chớp mắt 2 lần", 2],
-                ] as const).map(([key, label, index]) => (
+                {LIVENESS_STEPS.map((step, index) => (
                   <span
-                    key={key}
+                    key={step.challenge}
                     className={`rounded-full px-2.5 py-1 ${
-                      enrollmentChallenge === key
+                      enrollmentChallenge === step.challenge
                         ? "bg-amber-100 text-amber-700"
                         : enrollmentChallenge === "COMPLETE" || enrollmentChallengeIndex > index
                           ? "bg-emerald-100 text-emerald-700"
                           : "bg-slate-100 text-slate-400"
                     }`}
                   >
-                    {label}
+                    {step.label}
                   </span>
                 ))}
               </div>

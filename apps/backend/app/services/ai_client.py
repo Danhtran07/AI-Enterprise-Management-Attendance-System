@@ -103,6 +103,7 @@ class AIRecognitionClient:
         self,
         initial_face_image: bytes | None = None,
         candidates: list[AIRecognitionCandidate] | None = None,
+        identity_only: bool = False,
     ) -> LivenessSessionResponse:
         payload = None
         if initial_face_image is not None:
@@ -110,6 +111,8 @@ class AIRecognitionClient:
                 "image": base64.b64encode(initial_face_image).decode("ascii"),
                 "candidates": [candidate.model_dump() for candidate in candidates or []],
             }
+            if identity_only:
+                payload["identity_only"] = True
         try:
             endpoint = f"{self._endpoint.rsplit('/face/', 1)[0]}/session/create"
             response = (

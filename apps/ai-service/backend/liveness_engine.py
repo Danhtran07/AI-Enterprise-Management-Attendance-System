@@ -1,4 +1,5 @@
 import math
+import cv2
 import numpy as np
 from collections.abc import Mapping
 from typing import Any, Protocol, TYPE_CHECKING
@@ -58,7 +59,7 @@ class ChallengeManagerProtocol(Protocol):
 class ChallengeManager:
     """In-memory challenge sequence: blink, mouth open, then two blinks."""
 
-    SEQUENCE = ("BLINK", "OPEN_MOUTH", "BLINK_TWICE")
+    SEQUENCE = ("BLINK", "OPEN_MOUTH")
 
     def __init__(self) -> None:
         self._index = 0
@@ -88,9 +89,9 @@ class ChallengeManager:
         if self.complete or challenge != self.current_challenge:
             return False
 
-        if challenge in ("BLINK", "BLINK_TWICE"):
+        if challenge == "BLINK":
             self._blink_total += max(1 if blink else 0, blink_count)
-            passed = self._blink_total >= (2 if challenge == "BLINK_TWICE" else 1)
+            passed = self._blink_total >= 1
             if passed:
                 self._checks["blink"] = True
         else:
@@ -140,12 +141,13 @@ class LivenessEngine:
                     "checks": {"blink": False, "mouth": False, "motion": False}}
         checks = dict(state["checks"])
         confidence = state["confidence"]
-        score = round(
-            BLINK_WEIGHT * confidence["blink"]
-            + MOUTH_WEIGHT * confidence["mouth"]
-            + MOTION_WEIGHT * confidence["motion"], 4,
-        )
-        return {"is_live": bool(all(checks.values()) and score >= LIVE_THRESHOLD),
+        # Motion is supplemental anti-replay evidence, not an enrollment
+        # challenge. Keep reporting its check/score, but don't require it for
+        # liveness completion: the user is explicitly asked to blink and open
+        # their mouth only.
+        score = self._challenge_score(confidence)
+        required_checks_passed = checks["blink"] and checks["mouth"]
+        return {"is_live": bool(required_checks_passed and score >= LIVE_THRESHOLD),
                 "liveness_score": score, "checks": checks}
 
     def evaluate_challenge(
@@ -181,10 +183,6 @@ class LivenessEngine:
         elif challenge_name == "BLINK":
             passed = bool(self._value(metrics, "blink_detected", False))
             new_count = 1 if passed else 0
-        elif challenge_name == "BLINK_TWICE":
-            blink_count = self._bounded_int(self._value(metrics, "blink_count", 0))
-            new_count = max(0, blink_count - blink_count_at_start)
-            passed = new_count >= 2
         elif challenge_name == "OPEN_MOUTH":
             frame_passes = bool(self._value(metrics, "mouth_open", False))
             new_count = consecutive_count + 1 if frame_passes else 0
@@ -197,7 +195,7 @@ class LivenessEngine:
         else:
             new_count, passed = 0, False
 
-        if passed and challenge_name in ("BLINK", "BLINK_TWICE"):
+        if passed and challenge_name == "BLINK":
             checks["blink"] = True
             confidence["blink"] = max(
                 confidence["blink"],
@@ -206,15 +204,12 @@ class LivenessEngine:
         if passed and challenge_name == "OPEN_MOUTH":
             checks["mouth"] = True
 
-        score = round(
-            BLINK_WEIGHT * confidence["blink"]
-            + MOUTH_WEIGHT * confidence["mouth"]
-            + MOTION_WEIGHT * confidence["motion"], 4,
-        )
+        score = self._challenge_score(confidence)
+        required_checks_passed = checks["blink"] and checks["mouth"]
         return {
             "challenge_passed": passed,
             "consecutive_count": new_count,
-            "is_live": bool(is_final_challenge and passed and all(checks.values())
+            "is_live": bool(is_final_challenge and passed and required_checks_passed
                              and score >= LIVE_THRESHOLD),
             "liveness_score": score,
             "checks": dict(checks),
@@ -246,18 +241,23 @@ class LivenessEngine:
                     self._confidence[name], self._bounded_float(confidence)
                 )
 
-        score = round(
-            BLINK_WEIGHT * self._confidence["blink"]
-            + MOUTH_WEIGHT * self._confidence["mouth"]
-            + MOTION_WEIGHT * self._confidence["motion"],
-            4,
-        )
+        score = self._challenge_score(self._confidence)
         checks = dict(self._checks)
         return {
-            "is_live": bool(all(checks.values()) and score >= LIVE_THRESHOLD),
+            "is_live": bool(checks["blink"] and checks["mouth"] and score >= LIVE_THRESHOLD),
             "liveness_score": score,
             "checks": checks,
         }
+
+    @staticmethod
+    def _challenge_score(confidence: Mapping[str, float]) -> float:
+        """Score only instructed blink/mouth checks; motion remains auxiliary."""
+        required_weight = BLINK_WEIGHT + MOUTH_WEIGHT
+        score = (
+            BLINK_WEIGHT * confidence["blink"]
+            + MOUTH_WEIGHT * confidence["mouth"]
+        ) / required_weight
+        return round(score, 4)
 
     @staticmethod
     def _value(result: Any, key: str, default: Any) -> Any:
@@ -291,7 +291,6 @@ class LivenessEngine:
         Process one JPEG frame. Returns a fully populated FaceMetrics including
         forehead_rgb and forehead_bbox_norm when a face is detected.
         """
-        import cv2
         import mediapipe as mp
         import numpy as np
         from models import FaceMetrics
@@ -382,6 +381,7 @@ class LivenessEngine:
         bs = self.extract_blendshapes(result)
         metrics = FaceMetrics(
             face_detected=True,
+            blink_calibrated=bool(blink and blink.calibrated),
             blink_detected=bool(blink and blink.blink),
             blink_count=int(blink.count) if blink else 0,
             blink_confidence=float(blink.blink_confidence) if blink and blink.blink else 0.0,

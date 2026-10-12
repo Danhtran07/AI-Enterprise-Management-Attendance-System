@@ -21,6 +21,34 @@ def test_large_realistic_face_with_low_texture_is_still_filtered():
     assert decision is True
 
 
+def test_lighting_mean_helper_has_access_to_opencv():
+    import numpy as np
+
+    engine = LivenessEngine()
+    landmarks = [
+        SimpleNamespace(x=0.2 + (index % 10) * 0.01,
+                        y=0.2 + ((index // 10) % 10) * 0.01)
+        for index in range(468)
+    ]
+    frame = np.full((100, 100, 3), 128, dtype=np.uint8)
+
+    assert engine._compute_lighting_mean(frame, landmarks, 100, 100) == 128.0
+
+
+def test_spoof_helper_has_access_to_opencv():
+    import numpy as np
+
+    engine = LivenessEngine()
+    landmarks = [SimpleNamespace(x=0.2, y=0.2, z=0.0)] * 468
+    frame = np.full((100, 100, 3), 128, dtype=np.uint8)
+
+    texture, z_std, is_spoof = engine._check_spoof(frame, landmarks, 100, 100)
+
+    assert texture == 0.0
+    assert z_std == 0.0
+    assert is_spoof is False
+
+
 def test_blink_challenge_uses_completed_blink_event():
     metrics = FaceMetrics(face_detected=True, blink_detected=True, blink_count=1)
 
@@ -37,34 +65,6 @@ def test_blink_challenge_does_not_pass_without_blink_signal():
 
     assert passed is False
     assert count == 0
-
-
-def test_blink_twice_requires_two_new_blink_events():
-    metrics = FaceMetrics(face_detected=True, blink_count=3)
-
-    passed, count = evaluate_challenge(
-        ChallengeType.BLINK_TWICE,
-        metrics,
-        0,
-        blink_count_at_challenge_start=1,
-    )
-
-    assert passed is True
-    assert count == 2
-
-
-def test_blink_twice_does_not_pass_with_only_one_new_blink():
-    metrics = FaceMetrics(face_detected=True, blink_count=2)
-
-    passed, count = evaluate_challenge(
-        ChallengeType.BLINK_TWICE,
-        metrics,
-        0,
-        blink_count_at_challenge_start=1,
-    )
-
-    assert passed is False
-    assert count == 1
 
 
 def test_mouth_open_challenge_accepts_a_clear_mouth_open_score():
@@ -89,10 +89,14 @@ def test_challenge_sequence_has_no_head_turn_steps():
     assert CHALLENGE_SEQUENCE == [
         ChallengeType.BLINK,
         ChallengeType.OPEN_MOUTH,
-        ChallengeType.BLINK_TWICE,
     ]
+    assert "BLINK_TWICE" not in ChallengeType.__members__
     assert "TURN_LEFT" not in ChallengeType.__members__
     assert "TURN_RIGHT" not in ChallengeType.__members__
+
+
+def test_blink_calibration_is_exposed_in_frame_metrics():
+    assert FaceMetrics(face_detected=True).blink_calibrated is False
 
 
 def test_blink_score_uses_eye_geometry_when_blendshape_is_missing():
@@ -110,3 +114,31 @@ def test_blink_score_uses_eye_geometry_when_blendshape_is_missing():
     score = LivenessEngine.__new__(LivenessEngine)._compute_blink_score(result, landmarks)
 
     assert score >= 0.35
+
+
+def test_lighting_mean_helper_has_access_to_opencv():
+    import numpy as np
+
+    engine = LivenessEngine()
+    landmarks = [
+        SimpleNamespace(x=0.2 + (index % 10) * 0.01,
+                        y=0.2 + ((index // 10) % 10) * 0.01)
+        for index in range(468)
+    ]
+    frame = np.full((100, 100, 3), 128, dtype=np.uint8)
+
+    assert engine._compute_lighting_mean(frame, landmarks, 100, 100) == 128.0
+
+
+def test_spoof_helper_has_access_to_opencv():
+    import numpy as np
+
+    engine = LivenessEngine()
+    landmarks = [SimpleNamespace(x=0.2, y=0.2, z=0.0)] * 468
+    frame = np.full((100, 100, 3), 128, dtype=np.uint8)
+
+    texture, z_std, is_spoof = engine._check_spoof(frame, landmarks, 100, 100)
+
+    assert texture == 0.0
+    assert z_std == 0.0
+    assert is_spoof is False
