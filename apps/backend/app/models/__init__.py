@@ -1,4 +1,9 @@
 from app.models.attendance import Attendance, AttendanceStatus
+from app.models.attendance_request import (
+    AttendanceRequest,
+    AttendanceRequestStatus,
+    AttendanceRequestType,
+)
 from app.models.employee import Employee
 from app.models.face_data import FaceData
 from app.models.shift import Shift
@@ -16,6 +21,9 @@ __all__ = [
     "FaceData",
     "Attendance",
     "AttendanceStatus",
+    "AttendanceRequest",
+    "AttendanceRequestStatus",
+    "AttendanceRequestType",
     "Shift",
     "WorkSchedule",
     "ScheduleRule",

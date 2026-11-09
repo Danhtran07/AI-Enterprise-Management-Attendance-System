@@ -221,6 +221,19 @@ export default function Employees() {
      FILTER
   ========================================================== */
 
+  const [departmentFilter, setDepartmentFilter] = useState("");
+  const [enrollmentFilter, setEnrollmentFilter] = useState<
+    "ALL" | "ENROLLED" | "NOT_ENROLLED"
+  >("ALL");
+
+  const departments = useMemo(() => {
+    const set = new Set<string>();
+    employees.forEach((emp) => {
+      if (emp.department?.trim()) set.add(emp.department.trim());
+    });
+    return Array.from(set).sort();
+  }, [employees]);
+
   const filteredEmployees =
     useMemo(() => {
 
@@ -229,13 +242,23 @@ export default function Employees() {
           .trim()
           .toLowerCase();
 
-      if (!keyword) {
-        return employees;
-      }
-
       return employees.filter(
         (employee) => {
-
+          if (
+            departmentFilter &&
+            (employee.department || "").trim() !== departmentFilter
+          ) {
+            return false;
+          }
+          if (enrollmentFilter === "ENROLLED" && !employee.face_enrolled) {
+            return false;
+          }
+          if (enrollmentFilter === "NOT_ENROLLED" && employee.face_enrolled) {
+            return false;
+          }
+          if (!keyword) {
+            return true;
+          }
           return [
             employee.employee_code,
             employee.full_name,
@@ -250,7 +273,7 @@ export default function Employees() {
         }
       );
 
-    }, [employees, search]);
+    }, [employees, search, departmentFilter, enrollmentFilter]);
 
 
   /* ==========================================================
@@ -1278,22 +1301,53 @@ export default function Employees() {
           </div>
 
 
-          {/* Count */}
+          {/* Filters & Count */}
 
-          <div
-            className="
-              shrink-0
-              text-sm
-              font-semibold
-              text-slate-400
-            "
-          >
-            <span className="text-slate-700">
-              {filteredEmployees.length}
-            </span>{" "}
-            {filteredEmployees.length === 1
-              ? "employee"
-              : "employees"}
+          <div className="flex flex-wrap items-center gap-3">
+            <select
+              value={departmentFilter}
+              onChange={(e) => setDepartmentFilter(e.target.value)}
+              disabled={loading}
+              className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-semibold text-slate-700 outline-none focus:border-blue-400 focus:bg-white"
+            >
+              <option value="">All Departments</option>
+              {departments.map((dept) => (
+                <option key={dept} value={dept}>
+                  {dept}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={enrollmentFilter}
+              onChange={(e) =>
+                setEnrollmentFilter(
+                  e.target.value as "ALL" | "ENROLLED" | "NOT_ENROLLED"
+                )
+              }
+              disabled={loading}
+              className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-semibold text-slate-700 outline-none focus:border-blue-400 focus:bg-white"
+            >
+              <option value="ALL">All Biometric Status</option>
+              <option value="ENROLLED">Face Enrolled</option>
+              <option value="NOT_ENROLLED">Not Enrolled</option>
+            </select>
+
+            <div
+              className="
+                shrink-0
+                text-sm
+                font-semibold
+                text-slate-400
+              "
+            >
+              <span className="text-slate-700">
+                {filteredEmployees.length}
+              </span>{" "}
+              {filteredEmployees.length === 1
+                ? "employee"
+                : "employees"}
+            </div>
           </div>
 
         </div>

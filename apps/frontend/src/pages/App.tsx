@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ScanFace } from "lucide-react";
+import { RefreshCw, ScanFace, ShieldCheck, Zap } from "lucide-react";
 import {
   DrawingUtils,
   FaceLandmarker,
@@ -27,9 +27,30 @@ type CheckInState =
   | "failure";
 
 const LIVENESS_SESSION_KEY = "liveness_session_id";
-const FAST_ATTENDANCE = false;
 const FACE_LANDMARKER_MODEL =
   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+
+function playSuccessBeep() {
+  try {
+    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(880, ctx.currentTime);
+    osc.frequency.setValueAtTime(1174.66, ctx.currentTime + 0.1);
+    gain.gain.setValueAtTime(0.12, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.35);
+  } catch {
+    // Ignore audio context restrictions
+  }
+}
+
 function formatTime(value: string | null) {
   if (!value) return "-";
   return new Date(value).toLocaleTimeString("vi-VN", {
@@ -61,6 +82,9 @@ export default function App() {
   const [challengeIndex, setChallengeIndex] = useState(0);
   const [feedback, setFeedback] = useState("Preparing liveness verification...");
   const [livenessComplete, setLivenessComplete] = useState(false);
+  const [fastMode, setFastMode] = useState(false);
+  const [kioskMode, setKioskMode] = useState(false);
+  const [kioskCountdown, setKioskCountdown] = useState(4);
 
   const stopLiveness = () => {
     if (frameTimerRef.current !== null) {
@@ -212,7 +236,7 @@ export default function App() {
         void startFaceMesh().catch(() => undefined);
       });
 
-      if (FAST_ATTENDANCE) {
+      if (fastMode) {
         setLivenessComplete(true);
         setFeedback("Face mesh active. Hold still for fast attendance scan...");
         window.setTimeout(() => {
@@ -330,10 +354,11 @@ export default function App() {
       setState("recognizing");
       const response = await recognizeAttendance(
         image,
-        FAST_ATTENDANCE ? undefined : sessionStorage.getItem(LIVENESS_SESSION_KEY) || undefined,
-        FAST_ATTENDANCE
+        fastMode ? undefined : sessionStorage.getItem(LIVENESS_SESSION_KEY) || undefined,
+        fastMode
       );
       setResult(response);
+      playSuccessBeep();
       stopCamera();
       setState("success");
     } catch (reason) {
@@ -342,6 +367,25 @@ export default function App() {
       setState("failure");
     }
   };
+
+  useEffect(() => {
+    if (state !== "success" || !kioskMode) return;
+    setKioskCountdown(4);
+    const interval = window.setInterval(() => {
+      setKioskCountdown((prev) => {
+        if (prev <= 1) {
+          window.clearInterval(interval);
+          reset();
+          window.setTimeout(() => {
+            void startCamera();
+          }, 150);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [state, kioskMode]);
 
   if (state === "uploading" || state === "recognizing") {
     return (
@@ -425,10 +469,13 @@ export default function App() {
             </div>
             <div className="rounded-xl border border-slate-200 p-4">
               <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-400">
-                Check-in
+                Check-in / Check-out
               </p>
-              <p className="mt-2 text-xl font-semibold text-slate-900">
-                {formatTime(result.attendance.check_in)}
+              <p className="mt-2 text-lg font-semibold text-slate-900">
+                In: {formatTime(result.attendance.check_in)}
+                {result.attendance.check_out
+                  ? ` · Out: ${formatTime(result.attendance.check_out)}`
+                  : ""}
               </p>
             </div>
             <div className="rounded-xl border border-slate-200 p-4">
@@ -443,6 +490,11 @@ export default function App() {
             </div>
           </div>
           <div className="border-t border-slate-100 px-6 py-5 sm:px-10">
+            {kioskMode && (
+              <p className="mb-3 text-center text-xs font-bold text-emerald-700">
+                Kiosk Mode: Automatically scanning next employee in {kioskCountdown}s...
+              </p>
+            )}
             <button
               type="button"
               onClick={reset}
@@ -459,16 +511,60 @@ export default function App() {
   return (
     <main className="min-h-[calc(100vh-5rem)] bg-slate-50 px-4 py-8 sm:px-6 lg:px-8">
       <section className="mx-auto max-w-5xl">
-        <div className="mb-8 max-w-2xl">
-          <p className="text-xs font-bold uppercase tracking-[0.2em] text-blue-600">
-            FaceAttend AI
-          </p>
-          <h1 className="mt-3 text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
-            AI Face Check-in
-          </h1>
-          <p className="mt-3 text-base leading-7 text-slate-500">
-            Verify your identity with a live camera capture before recording attendance.
-          </p>
+        <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div className="max-w-2xl">
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-blue-600">
+              FaceAttend AI Terminal
+            </p>
+            <h1 className="mt-3 text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
+              AI Face Check-in
+            </h1>
+            <p className="mt-3 text-base leading-7 text-slate-500">
+              Verify your identity with a live camera capture before recording attendance.
+            </p>
+          </div>
+
+          {/* KIOSK & VERIFICATION MODE CONTROLS */}
+          <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
+            <button
+              type="button"
+              disabled={state === "camera"}
+              onClick={() => setFastMode(false)}
+              className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-bold transition ${
+                !fastMode
+                  ? "bg-blue-600 text-white shadow-sm"
+                  : "text-slate-600 hover:bg-slate-50"
+              } disabled:opacity-50`}
+            >
+              <ShieldCheck size={15} />
+              Active Liveness
+            </button>
+            <button
+              type="button"
+              disabled={state === "camera"}
+              onClick={() => setFastMode(true)}
+              className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-bold transition ${
+                fastMode
+                  ? "bg-blue-600 text-white shadow-sm"
+                  : "text-slate-600 hover:bg-slate-50"
+              } disabled:opacity-50`}
+            >
+              <Zap size={15} />
+              Fast Scan (1.2s)
+            </button>
+            <button
+              type="button"
+              onClick={() => setKioskMode((v) => !v)}
+              className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold transition ${
+                kioskMode
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              <RefreshCw size={14} />
+              Kiosk Auto-Loop: {kioskMode ? "ON" : "OFF"}
+            </button>
+          </div>
         </div>
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-soft sm:p-8">
           <div className={state === "camera" ? "relative aspect-video overflow-hidden rounded-xl bg-slate-950" : "hidden"}>
@@ -491,7 +587,7 @@ export default function App() {
           <canvas ref={canvasRef} className="hidden" />
           {state === "camera" ? (
             <>
-              {!FAST_ATTENDANCE && <button
+              {!fastMode && <button
                 type="button"
                 onClick={capture}
                 disabled={!livenessComplete}
@@ -500,7 +596,7 @@ export default function App() {
                 {livenessComplete ? "Capture" : "Complete liveness verification first"}
               </button>}
               <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50 p-4 text-center">
-                {!FAST_ATTENDANCE && (
+                {!fastMode && (
                   <ol className="mb-4 grid grid-cols-3 gap-2 text-left" aria-label="Liveness challenge progress">
                     {LIVENESS_STEPS.map((step, index) => {
                       const completed = challenge === "COMPLETE" || index < challengeIndex;
@@ -525,7 +621,7 @@ export default function App() {
                   </ol>
                 )}
                 <p className="text-xs font-bold uppercase tracking-[0.16em] text-blue-600">
-                  {FAST_ATTENDANCE ? "Fast attendance scan" : challengeLabel(challenge)}
+                  {fastMode ? "Fast attendance scan" : challengeLabel(challenge)}
                 </p>
                 <p className="mt-1 text-sm font-medium text-slate-700">{feedback}</p>
               </div>

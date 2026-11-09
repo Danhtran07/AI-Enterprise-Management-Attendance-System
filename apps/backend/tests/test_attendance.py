@@ -480,3 +480,90 @@ def test_delete_user_with_employee_success(db_session, auth_headers, employee):
     assert response.content == b""
     assert db_session.query(User).filter(User.id == user.id).first() is None
     assert db_session.query(Employee).filter(Employee.id == employee.id).first() is None
+
+
+def test_monthly_timesheet_report_and_ai_metrics(db_session, auth_headers, employee):
+    record = Attendance(
+        employee_id=employee.id,
+        date=date(2026, 9, 2),
+        check_in=datetime(2026, 9, 2, 8, 10, 0),
+        check_out=datetime(2026, 9, 2, 17, 40, 0),
+        status=AttendanceStatus.LATE,
+        late_minutes=10,
+        working_minutes=510,
+        overtime_minutes=40,
+        face_similarity=0.92,
+        liveness_score=0.97,
+        verification_status="VERIFIED",
+    )
+    db_session.add(record)
+    db_session.commit()
+
+    report_resp = client.get(
+        "/api/attendance/report",
+        params={"year": 2026, "month": 9, "department": "IT"},
+        headers=auth_headers,
+    )
+    assert report_resp.status_code == 200
+    report_data = report_resp.json()
+    assert report_data["total_employees"] == 1
+    row = report_data["rows"][0]
+    assert row["employee_code"] == "EMP-ATT-001"
+    assert row["late_days"] == 1
+    assert row["total_working_minutes"] == 510
+    assert row["total_overtime_minutes"] == 40
+
+    metrics_resp = client.get("/api/attendance/ai-metrics", headers=auth_headers)
+    assert metrics_resp.status_code == 200
+    metrics_data = metrics_resp.json()
+    assert metrics_data["verified_count"] == 1
+    assert metrics_data["avg_face_similarity"] == 0.92
+
+
+def test_attendance_request_create_and_admin_approve_workflow(
+    db_session,
+    auth_headers,
+    employee_user_headers,
+):
+    emp_headers, _, own_employee = employee_user_headers
+
+    create_resp = client.post(
+        "/api/attendance/requests",
+        json={
+            "date": "2026-09-15",
+            "request_type": "FORGOT_CHECKIN",
+            "reason": "Camera was under maintenance at the entrance.",
+            "requested_check_in": "2026-09-15T08:00:00",
+            "requested_check_out": "2026-09-15T17:00:00",
+        },
+        headers=emp_headers,
+    )
+    assert create_resp.status_code == 201
+    req_data = create_resp.json()
+    assert req_data["status"] == "PENDING"
+    assert req_data["employee_id"] == own_employee.id
+
+    review_resp = client.put(
+        f"/api/attendance/requests/{req_data['id']}/review",
+        json={
+            "status": "APPROVED",
+            "admin_note": "Verified with security desk",
+        },
+        headers=auth_headers,
+    )
+    assert review_resp.status_code == 200
+    reviewed = review_resp.json()
+    assert reviewed["status"] == "APPROVED"
+    assert reviewed["admin_note"] == "Verified with security desk"
+
+    attendance = (
+        db_session.query(Attendance)
+        .filter(
+            Attendance.employee_id == own_employee.id,
+            Attendance.date == date(2026, 9, 15),
+        )
+        .first()
+    )
+    assert attendance is not None
+    assert attendance.status == AttendanceStatus.PRESENT
+    assert attendance.verification_status == "ADMIN_APPROVED"

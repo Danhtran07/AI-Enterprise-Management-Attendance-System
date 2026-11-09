@@ -14,6 +14,9 @@ from app.core.config import settings
 from app.core.database import Base
 from app.models import (
     Attendance,
+    AttendanceRequest,
+    AttendanceRequestStatus,
+    AttendanceRequestType,
     AttendanceStatus,
     Employee,
     FaceData,

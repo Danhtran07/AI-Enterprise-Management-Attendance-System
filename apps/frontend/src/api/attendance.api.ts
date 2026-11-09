@@ -1,9 +1,15 @@
 import apiClient from "./client";
 import type {
+  AIBiometricsMetricsResponse,
   Attendance,
   AttendanceCalendarResponse,
   AttendanceCreate,
+  AttendanceRequestCreatePayload,
+  AttendanceRequestItem,
+  AttendanceRequestReviewPayload,
+  AttendanceRequestStatus,
   AttendanceUpdate,
+  MonthlyTimesheetReportResponse,
 } from "../types/attendance";
 
 export async function getAttendanceCalendar(
@@ -22,6 +28,64 @@ export async function getAttendanceCalendar(
     }
   );
 
+  return response.data;
+}
+
+export async function getMonthlyTimesheetReport(
+  year: number,
+  month: number,
+  department?: string
+): Promise<MonthlyTimesheetReportResponse> {
+  const response = await apiClient.get<MonthlyTimesheetReportResponse>(
+    "/api/attendance/report",
+    {
+      params: {
+        year,
+        month,
+        ...(department ? { department } : {}),
+      },
+    }
+  );
+  return response.data;
+}
+
+export async function getAIBiometricsMetrics(): Promise<AIBiometricsMetricsResponse> {
+  const response = await apiClient.get<AIBiometricsMetricsResponse>(
+    "/api/attendance/ai-metrics"
+  );
+  return response.data;
+}
+
+export async function getAttendanceRequests(
+  status?: AttendanceRequestStatus
+): Promise<AttendanceRequestItem[]> {
+  const response = await apiClient.get<AttendanceRequestItem[]>(
+    "/api/attendance/requests",
+    {
+      params: status ? { status } : {},
+    }
+  );
+  return response.data;
+}
+
+export async function createAttendanceRequest(
+  payload: AttendanceRequestCreatePayload
+): Promise<AttendanceRequestItem> {
+  const response = await apiClient.post<AttendanceRequestItem>(
+    "/api/attendance/requests",
+    payload
+  );
+  return response.data;
+}
+
+export async function reviewAttendanceRequest(
+  requestId: number,
+  payload: AttendanceRequestReviewPayload
+): Promise<AttendanceRequestItem> {
+  const response = await apiClient.put<AttendanceRequestItem>(
+    `/api/attendance/requests/${requestId}/review`,
+    payload
+  );
   return response.data;
 }
 
